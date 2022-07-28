@@ -1,3 +1,4 @@
+import pdb
 import logging
 import math
 
@@ -32,20 +33,22 @@ def get_cifar10(args, root):
         transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
     ])
     base_dataset = datasets.CIFAR10(root, train=True, download=True)
-
+    #train dataset -> labeled/unlabeled datasets
     train_labeled_idxs, train_unlabeled_idxs = x_u_split(
         args, base_dataset.targets)
-
+    #Labeled dataset
     train_labeled_dataset = CIFAR10SSL(
         root, train_labeled_idxs, train=True,
         transform=transform_labeled)
-
+    #Unlabeled dataset
     train_unlabeled_dataset = CIFAR10SSL(
         root, train_unlabeled_idxs, train=True,
         transform=TransformFixMatch(mean=cifar10_mean, std=cifar10_std))
 
     test_dataset = datasets.CIFAR10(
         root, train=False, transform=transform_val, download=False)
+
+    #base_dataset.targets: (50000,)
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset
 
@@ -70,10 +73,11 @@ def get_cifar100(args, root):
     train_labeled_idxs, train_unlabeled_idxs = x_u_split(
         args, base_dataset.targets)
 
+    #Labeled dataset
     train_labeled_dataset = CIFAR100SSL(
         root, train_labeled_idxs, train=True,
         transform=transform_labeled)
-
+    #Unlabeled dataset
     train_unlabeled_dataset = CIFAR100SSL(
         root, train_unlabeled_idxs, train=True,
         transform=TransformFixMatch(mean=cifar100_mean, std=cifar100_std))
@@ -86,14 +90,14 @@ def get_cifar100(args, root):
 
 def x_u_split(args, labels):
     label_per_class = args.num_labeled // args.num_classes
-    labels = np.array(labels)
+    labels = np.array(labels) #labels: (50000,)
     labeled_idx = []
     # unlabeled data: all data (https://github.com/kekmodel/FixMatch-pytorch/issues/10)
     unlabeled_idx = np.array(range(len(labels)))
     for i in range(args.num_classes):
-        idx = np.where(labels == i)[0]
+        idx = np.where(labels == i)[0] #i에 해당하는 index return
         idx = np.random.choice(idx, label_per_class, False)
-        labeled_idx.extend(idx)
+        labeled_idx.extend(idx) #extend: 여러 개 한번에 append
     labeled_idx = np.array(labeled_idx)
     assert len(labeled_idx) == args.num_labeled
 
@@ -137,7 +141,7 @@ class CIFAR10SSL(datasets.CIFAR10):
                          target_transform=target_transform,
                          download=download)
         if indexs is not None:
-            self.data = self.data[indexs]
+            self.data = self.data[indexs] #self.data: from superclass
             self.targets = np.array(self.targets)[indexs]
 
     def __getitem__(self, index):
@@ -145,7 +149,7 @@ class CIFAR10SSL(datasets.CIFAR10):
         img = Image.fromarray(img)
 
         if self.transform is not None:
-            img = self.transform(img)
+            img = self.transform(img)   #Unlabeled 경우 weak, strong 모두 return
 
         if self.target_transform is not None:
             target = self.target_transform(target)
@@ -162,7 +166,7 @@ class CIFAR100SSL(datasets.CIFAR100):
                          target_transform=target_transform,
                          download=download)
         if indexs is not None:
-            self.data = self.data[indexs]
+            self.data = self.data[indexs] #self.data: from superclass
             self.targets = np.array(self.targets)[indexs]
 
     def __getitem__(self, index):

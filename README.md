@@ -37,6 +37,11 @@ Train the model by 10000 labeled data of CIFAR-100 dataset by using DistributedD
 python -m torch.distributed.launch --nproc_per_node 4 ./train.py --dataset cifar100 --num-labeled 10000 --arch wideresnet --batch-size 16 --lr 0.03 --wdecay 0.001 --expand-labels --seed 5 --out results/cifar100@10000
 ```
 
+(my)Train the model by 4000 labeled data of CIFAR-10 dataset by using DistributedDataParallel with 2GPUS:
+```
+CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node 2 ./train.py --dataset cifar10 --num-labeled 4000 --arch wideresnet --batch-size 64 --lr 0.03 --expand-labels --seed 5 --out results/cifar10@4000.5
+```
+
 ### Monitoring training progress
 ```
 tensorboard --logdir=<your out_dir>
