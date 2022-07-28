@@ -21,6 +21,8 @@ from tqdm import tqdm
 import torchvision.transforms as transforms
 
 from dataset.cifar import DATASET_GETTERS
+from dataset.cifar import CIFAR10SSL, TransformFixMatch
+
 from utils import AverageMeter, accuracy
 from dataset.noisy_cifar import CIFAR10, CIFAR100
 from models.resnet import ResNet50, ResNet101
@@ -45,7 +47,6 @@ def set_seed(args):
     torch.manual_seed(args.seed)
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
-
 
 def get_cosine_schedule_with_warmup(optimizer,
                                     num_warmup_steps,
@@ -136,6 +137,7 @@ def main():
     parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.6)
     parser.add_argument('--remove_rate', type=float, help='rate of the total dataset to be removed', default=0.8)
     parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
+    parser.add_argument('--mask_epoch', type=int, default=30)
 
     args = parser.parse_args()
     global best_acc
@@ -267,10 +269,25 @@ def main():
                                 )
     remove_rate = args.remove_rate
 
-    masking(args, train_dataset, test_dataset, remove_rate)
+    mask = masking(args, train_dataset, test_dataset, remove_rate)
 
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler 
     #distributedsampler: batch dataset을 core만큼 나눔
+    clear_idx = np.where(mask)[0]
+    unlabeled_idx = np.array(range(len(mask)))
+
+    transform_labeled = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(size=32,
+                              padding=int(32 * 0.125),
+                              padding_mode='reflect'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616))
+    ])
+
+
+    labeled_dataset = CIFAR10SSL('./data', clear_idx, train=True, transform = transform_labeled)
+    unlabeled_dataset = CIFAR10SSL('./data', unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
 
     labeled_trainloader = DataLoader(
         labeled_dataset,
@@ -374,11 +391,13 @@ def masking(args, train_dataset, test_dataset, remove_rate):
 
     optimizer1 = torch.optim.SGD(network.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
     criterion = torch.nn.CrossEntropyLoss(reduce=False, ignore_index=-1).cuda()
+
     noise_or_not = train_dataset.noise_or_not
     moving_loss_dic = np.zeros_like(noise_or_not)
     ndata = train_dataset.__len__()
+    best_mask_acc = 0
 
-    for epoch in range(1, 30):
+    for epoch in range(1, args.mask_epoch):
         # train models
         globals_loss = 0
         network.train()
@@ -426,6 +445,9 @@ def masking(args, train_dataset, test_dataset, remove_rate):
         mask[ind_1_sorted[num_remember:]] = 0  # 지워야 할 인덱스에 대해 0 저장. mask[idx]=0
 
         correct_acc = np.sum(np.logical_and(mask, noise_or_not)) / (np.sum(mask))
+        if correct_acc>best_mask_acc:
+            best_mask_acc = correct_acc
+            best_mask = mask
 
         top_accuracy_rm = int(0.9 * len(loss_1_sorted))
         top_accuracy = 1 - np.sum(noise_or_not[ind_1_sorted[top_accuracy_rm:]]) / float(
@@ -434,6 +456,7 @@ def masking(args, train_dataset, test_dataset, remove_rate):
         print("Masking - " + "epoch:%d" % epoch, "lr:%f" % lr, "train_loss:", globals_loss / ndata,
               "test_accuarcy:%f" % accuracy, "!!noise_accuracy:%f" % (correct_acc),
               "!! top 0.1 noise accuracy:%f" % top_accuracy)
+    return best_mask
 
 
 def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
