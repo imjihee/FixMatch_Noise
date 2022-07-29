@@ -133,16 +133,22 @@ class TransformFixMatch(object):
 
 
 class CIFAR10SSL(datasets.CIFAR10):
-    def __init__(self, root, indexs, train=True,
+    def __init__(self, root, train_dataset, indexs, train=True,
                  transform=None, target_transform=None,
                  download=False):
         super().__init__(root, train=train,
                          transform=transform,
                          target_transform=target_transform,
                          download=download)
-        if indexs is not None:
-            self.data = self.data[indexs] #self.data: from superclass
-            self.targets = np.array(self.targets)[indexs]
+        self.data = []
+        self.targets = []
+        for idx in indexs:
+            #img, target = train_dataset(idx)
+            self.data.append(train_dataset.train_data[idx])
+            self.targets.append(train_dataset.train_noisy_labels[idx])
+        #if indexs is not None:
+            #self.data = self.data[indexs] #self.data: from superclass
+            #self.targets = np.array(self.targets)[indexs]
 
     def __getitem__(self, index):
         img, target = self.data[index], self.targets[index]

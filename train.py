@@ -138,7 +138,7 @@ def main():
     parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.6)
     parser.add_argument('--remove_rate', type=float, help='rate of the total dataset to be removed', default=0.8)
     parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
-    parser.add_argument('--mask_epoch', type=int, default=10)
+    parser.add_argument('--mask_epoch', type=int, default=2)
 
     args = parser.parse_args()
     global best_acc
@@ -276,6 +276,7 @@ def main():
     #distributedsampler: batch dataset을 core만큼 나눔
     clear_idx = np.where(mask)[0]
     unlabeled_idx = np.array(range(len(mask)))
+    print("* Labeled Index Length: ", len(clear_idx))
 
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -290,8 +291,8 @@ def main():
         transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616))
     ])
 
-    labeled_dataset = CIFAR10SSL('./data', clear_idx, train=True, transform = transform_labeled)
-    unlabeled_dataset = CIFAR10SSL('./data', unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
+    labeled_dataset = CIFAR10SSL('./data', train_dataset, clear_idx, train=True, transform = transform_labeled)
+    unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
     test_dataset = datasets.CIFAR10(
         './data', train=False, transform=transform_val, download=False)
 
