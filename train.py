@@ -1,12 +1,17 @@
 import argparse
 import logging
 import math
+import sys
 import os
 import random
 import shutil
 import time
+import pathlib
+import datetime
+from pytz import timezone
 import pdb
 from collections import OrderedDict
+import collections
 
 import numpy as np
 import torch
@@ -32,6 +37,7 @@ import transform_ad
 
 logger = logging.getLogger(__name__)
 best_acc = 0
+
 
 
 def save_checkpoint(state, is_best, checkpoint, filename='checkpoint.pth.tar'):
@@ -138,10 +144,27 @@ def main():
     parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.6)
     parser.add_argument('--remove_rate', type=float, help='rate of the total dataset to be removed', default=0.8)
     parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
-    parser.add_argument('--mask_epoch', type=int, default=2)
+    parser.add_argument('--mask_epoch', type=int, default=10)
 
     args = parser.parse_args()
     global best_acc
+
+    output_d = "log/" + args.dataset + "/noise_" + str(args.noise_rate) + "_remove_" + str(args.remove_rate)
+    output_dir = pathlib.Path(output_d)
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    td = datetime.datetime.now(timezone('Asia/Seoul'))
+    file_name = td.strftime('%m-%d_%H.%M') + ".log"
+
+    formatter = logging.Formatter('%(asctime)s - %(message)s')
+
+    file_handler = logging.FileHandler(output_d + '/' + file_name)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    #sys.stdout = Logger(output_d, args)
+    
+    print(args)
 
     def create_model(args):
         if args.arch == 'wideresnet':
@@ -275,8 +298,11 @@ def main():
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler 
     #distributedsampler: batch dataset을 core만큼 나눔
     clear_idx = np.where(mask)[0]
+
+    #labeled_idx = np.hstack([clear_idx for _ in range(7)])
     unlabeled_idx = np.array(range(len(mask)))
-    print("* Labeled Index Length: ", len(clear_idx))
+
+    #print("* Labeled Index Length: ", len(clear_idx), "*Expanded Index Length: ", len(labeled_idx))
 
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -295,6 +321,8 @@ def main():
     unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
     test_dataset = datasets.CIFAR10(
         './data', train=False, transform=transform_val, download=False)
+    correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
+    logger.info(f"  Correct_Accuracy = {correct_ac}")
 
     labeled_trainloader = DataLoader(
         labeled_dataset,
@@ -463,6 +491,10 @@ def masking(args, train_dataset, test_dataset, remove_rate):
         print("Masking - " + "epoch:%d" % epoch, "lr:%f" % lr, "train_loss:", globals_loss / ndata,
               "test_accuarcy:%f" % accuracy, "!!noise_accuracy:%f" % (correct_acc),
               "!! top 0.1 noise accuracy:%f" % top_accuracy)
+        logger.info('epoch: {:d}'.format(epoch))
+        logger.info('noise accuracy: {:.2f}'.format(correct_acc))
+        logger.info('test accuracy: {:.2f}'.format(accuracy))
+
     return best_mask
 
 
@@ -665,6 +697,23 @@ def test(args, test_loader, model, epoch):
     logger.info("top-1 acc: {:.2f}".format(top1.avg))
     logger.info("top-5 acc: {:.2f}".format(top5.avg))
     return losses.avg, top1.avg
+
+
+class Logger(object):
+    def __init__(self, dir, args):
+        td = datetime.datetime.now(timezone('Asia/Seoul'))
+        time_now = td.strftime('%m-%d_%H.%M')
+        
+        file_name = time_now + ".log"
+        self.terminal = sys.stdout
+        self.log = open(dir + "/" + file_name, "a")
+        
+    def write(self, temp):
+        self.terminal.write(temp)
+        self.log.write(temp)
+	
+    def flush(self):
+        pass
 
 
 if __name__ == '__main__':

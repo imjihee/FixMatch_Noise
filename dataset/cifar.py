@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 from torchvision import datasets
 from torchvision import transforms
+import collections
 
 from .randaugment import RandAugmentMC
 
@@ -142,10 +143,18 @@ class CIFAR10SSL(datasets.CIFAR10):
                          download=download)
         self.data = []
         self.targets = []
+        self.correct_cnt = 0
+        
         for idx in indexs:
             #img, target = train_dataset(idx)
             self.data.append(train_dataset.train_data[idx])
             self.targets.append(train_dataset.train_noisy_labels[idx])
+            if train_dataset.train_noisy_labels[idx] == train_dataset.train_labels[idx]:
+                self.correct_cnt += 1
+        
+        cnt = collections.Counter(np.array(self.targets))
+        print("* idx distribution: ", cnt)
+        
         #if indexs is not None:
             #self.data = self.data[indexs] #self.data: from superclass
             #self.targets = np.array(self.targets)[indexs]
