@@ -149,9 +149,9 @@ class CIFAR10SSL(datasets.CIFAR10):
             #img, target = train_dataset(idx)
             self.data.append(train_dataset.train_data[idx])
             self.targets.append(train_dataset.train_noisy_labels[idx])
+            #self.targets.append(train_dataset.train_labels[idx].item())
             if train_dataset.train_noisy_labels[idx] == train_dataset.train_labels[idx]:
                 self.correct_cnt += 1
-        
         cnt = collections.Counter(np.array(self.targets))
         print("* idx distribution: ", cnt)
         

@@ -144,7 +144,9 @@ def main():
     parser.add_argument('--noise_rate', type=float, help='corruption rate, should be less than 1', default=0.6)
     parser.add_argument('--remove_rate', type=float, help='rate of the total dataset to be removed', default=0.8)
     parser.add_argument('--noise_type', type=str, help='[pairflip, symmetric]', default='symmetric')
-    parser.add_argument('--mask_epoch', type=int, default=10)
+    parser.add_argument('--mask_epoch', type=int, default=30)
+    parser.add_argument('--ema_ensemble', action='store_true')
+    parser.add_argument('--ema_train_only', action='store_true')
 
     args = parser.parse_args()
     global best_acc
@@ -244,8 +246,7 @@ def main():
     labeled_dataset, unlabeled_dataset, test_dataset = DATASET_GETTERS[args.dataset](
         args, './data')
 
-    if args.local_rank == 0:
-        torch.distributed.barrier()
+    
     """
     transformer = transforms.Compose([
 	transforms.RandomHorizontalFlip(),
@@ -265,7 +266,7 @@ def main():
                                 noise_rate=args.noise_rate
                                 )
 
-        test_dataset = CIFAR10(root=args.result_dir,
+        test_dataset_mask = CIFAR10(root=args.result_dir,
                                download=True,
                                train=False,
                                transform=transforms.ToTensor(),
@@ -284,22 +285,25 @@ def main():
                                  noise_rate=args.noise_rate
                                  )
 
-        test_dataset = CIFAR100(root=args.result_dir,
+        test_dataset_mask = CIFAR100(root=args.result_dir,
                                 download=True,
                                 train=False,
                                 transform=transforms.ToTensor(),
                                 noise_type=args.noise_type,
                                 noise_rate=args.noise_rate
                                 )
+    if args.local_rank == 0:
+        torch.distributed.barrier()
+        
     remove_rate = args.remove_rate
 
-    mask = masking(args, train_dataset, test_dataset, remove_rate)
+    mask = masking(args, train_dataset, test_dataset_mask, remove_rate)
 
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler 
     #distributedsampler: batch dataset을 core만큼 나눔
     clear_idx = np.where(mask)[0]
 
-    #labeled_idx = np.hstack([clear_idx for _ in range(7)])
+    labeled_idx = np.hstack([clear_idx for _ in range(7)])
     unlabeled_idx = np.array(range(len(mask)))
 
     #print("* Labeled Index Length: ", len(clear_idx), "*Expanded Index Length: ", len(labeled_idx))
@@ -317,8 +321,9 @@ def main():
         transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616))
     ])
 
-    labeled_dataset = CIFAR10SSL('./data', train_dataset, clear_idx, train=True, transform = transform_labeled)
+    labeled_dataset = CIFAR10SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
     unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
+    #pdb.set_trace()
     test_dataset = datasets.CIFAR10(
         './data', train=False, transform=transform_val, download=False)
     correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
@@ -418,11 +423,11 @@ def masking(args, train_dataset, test_dataset, remove_rate):
 
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                                     batch_size=64,
-                                                    num_workers=24,
+                                                    num_workers=args.num_workers,
                                                     shuffle=True, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(
         dataset=test_dataset, batch_size=128,
-        num_workers=24, shuffle=False, pin_memory=False)
+        num_workers=args.num_workers, shuffle=False, pin_memory=False)
 
     optimizer1 = torch.optim.SGD(network.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
     criterion = torch.nn.CrossEntropyLoss(reduce=False, ignore_index=-1).cuda()
@@ -505,7 +510,7 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
     global best_acc
     test_accs = []
     end = time.time()
-
+    model_ema = ema_model.ema
     if args.world_size > 1:
         labeled_epoch = 0
         unlabeled_epoch = 0
@@ -561,14 +566,33 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
             logits_x = logits[:batch_size]
             logits_u_w, logits_u_s = logits[batch_size:].chunk(2)
             del logits
+            """EMA logits - labeled data"""
+            logits_ema = model_ema(inputs)
+            logits_ema = de_interleave(logits_ema, 2*args.mu+1)
+
+            logits_x_ema = logits_ema[:batch_size]
+            logits_u_w_ema, logits_u_s_ema = logits_ema[batch_size:].chunk(2)
+            del logits_ema
+
+            """If ema_ensemble"""
+            if args.ema_ensemble:
+                logits_x = (logits_x + logits_x_ema) / 2
 
             Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
 
             pseudo_label = torch.softmax(logits_u_w.detach()/args.T, dim=-1)
-            #torch_max: return values, indices
+            pseudo_label_ema = torch.softmax(logits_u_w_ema.detach()/args.T, dim=-1)
+            #torch.max: return values, indices
             max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+            max_probs_ema, targets_u_ema = torch.max(pseudo_label_ema, dim=-1)
+
+            if args.ema_ensemble:
+                max_probs = (max_probs + max_probs_ema) / 2
+                logits_u_s = (logits_u_s + logits_u_s_ema) / 2
             #ge: check if >=
             mask = max_probs.ge(args.threshold).float() #pseudo-labeling
+
+            #pdb.set_trace()
 
             Lu = (F.cross_entropy(logits_u_s, targets_u,
                                   reduction='none') * mask).mean()
@@ -694,6 +718,7 @@ def test(args, test_loader, model, epoch):
         if not args.no_progress:
             test_loader.close()
 
+    logger.info("epoch: {:d}".format(epoch+1))
     logger.info("top-1 acc: {:.2f}".format(top1.avg))
     logger.info("top-5 acc: {:.2f}".format(top5.avg))
     return losses.avg, top1.avg
