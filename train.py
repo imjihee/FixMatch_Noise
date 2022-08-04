@@ -112,7 +112,7 @@ def main():
                         help='weight decay')
     parser.add_argument('--nesterov', action='store_true', default=True,
                         help='use nesterov momentum')
-    parser.add_argument('--use-ema', action='store_true', default=True,
+    parser.add_argument('--use-ema', action='store_true',
                         help='use EMA model')
     parser.add_argument('--ema-decay', default=0.999, type=float,
                         help='EMA decay rate')
@@ -374,9 +374,9 @@ def main():
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, args.warmup, args.total_steps)
 
-    if args.use_ema:
-        from models.ema import ModelEMA
-        ema_model = ModelEMA(args, model, args.ema_decay)
+
+    from models.ema import ModelEMA
+    ema_model = ModelEMA(args, model, args.ema_decay)
 
     args.start_epoch = 0
 

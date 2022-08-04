@@ -40,6 +40,8 @@ python -m torch.distributed.launch --nproc_per_node 4 ./train.py --dataset cifar
 (my)Train the model by 4000 labeled data of CIFAR-10 dataset by using DistributedDataParallel with 2GPUS:
 ```
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node 2 ./train.py --dataset cifar10 --num-labeled 4000 --arch wideresnet --batch-size 64 --lr 0.03 --expand-labels --seed 5 --out results/cifar10@4000.5
+
+CUDA_VISIBLE_DEVICES=2 python train.py --dataset cifar10 --num-labeled 4000 --arch wideresnet --batch-size 64 --lr 0.03 --expand-labels --seed 5 --out results/cifar10@4000.5
 ```
 
 ### Monitoring training progress
