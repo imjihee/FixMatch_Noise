@@ -20,6 +20,114 @@ normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
 
 
+class TransformFixMatch(object):
+    def __init__(self, mean, std):
+        self.weak = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.RandomCrop(size=32,
+                                  padding=int(32*0.125),
+                                  padding_mode='reflect')])
+        self.weak2 = transforms.Compose([
+            #transforms.RandomGrayscale(),
+            #transforms.RandomRotation(degrees=10),
+            transforms.RandomCrop(size=32,
+                                  padding=int(32*0.125),
+                                  padding_mode='reflect')])
+        self.strong = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(size=32,
+                                  padding=int(32*0.125),
+                                  padding_mode='reflect'),
+            RandAugmentMC(n=2, m=10)])
+        self.normalize = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std)])
+
+    def __call__(self, x):
+        weak = self.weak(x)
+        weak2 = self.weak2(x)
+        strong = self.strong(x)
+        return self.normalize(weak), self.normalize(weak2), self.normalize(strong)
+
+
+class CIFAR10SSL(datasets.CIFAR10):
+    def __init__(self, root, train_dataset, indexs, train=True,
+                 transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, train=train,
+                         transform=transform,
+                         target_transform=target_transform,
+                         download=download)
+        self.data = []
+        self.targets = []
+        self.correct_cnt = 0
+        
+        for idx in indexs:
+            #img, target = train_dataset(idx)
+            self.data.append(train_dataset.train_data[idx])
+            self.targets.append(train_dataset.train_noisy_labels[idx])
+            #self.targets.append(train_dataset.train_labels[idx].item())
+            if train_dataset.train_noisy_labels[idx] == train_dataset.train_labels[idx]:
+                self.correct_cnt += 1
+        cnt = collections.Counter(np.array(self.targets))
+        print("* idx distribution: ", cnt)
+        
+        #if indexs is not None:
+            #self.data = self.data[indexs] #self.data: from superclass
+            #self.targets = np.array(self.targets)[indexs]
+
+    def __getitem__(self, index):
+        img, target = self.data[index], self.targets[index]
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)   #Unlabeled 경우 weak, strong 모두 return
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target
+
+
+class CIFAR100SSL(datasets.CIFAR100):
+    def __init__(self, root, train_dataset, indexs, train=True,
+                 transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, train=train,
+                         transform=transform,
+                         target_transform=target_transform,
+                         download=download)
+        self.data = []
+        self.targets = []
+        self.correct_cnt = 0
+
+        for idx in indexs:
+            #img, target = train_dataset(idx)
+            self.data.append(train_dataset.train_data[idx])
+            self.targets.append(train_dataset.train_noisy_labels[idx])
+            #self.targets.append(train_dataset.train_labels[idx].item())
+            if train_dataset.train_noisy_labels[idx] == train_dataset.train_labels[idx]:
+                self.correct_cnt += 1
+        cnt = collections.Counter(np.array(self.targets))
+        print("* idx distribution: ", cnt)
+
+    def __getitem__(self, index):
+        img, target = self.data[index], self.targets[index]
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target
+
+
+"""
+Not Used
+"""
 def get_cifar10(args, root):
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -109,93 +217,6 @@ def x_u_split(args, labels):
     np.random.shuffle(labeled_idx)
     return labeled_idx, unlabeled_idx
 
-
-class TransformFixMatch(object):
-    def __init__(self, mean, std):
-        self.weak = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(size=32,
-                                  padding=int(32*0.125),
-                                  padding_mode='reflect')])
-        self.strong = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(size=32,
-                                  padding=int(32*0.125),
-                                  padding_mode='reflect'),
-            RandAugmentMC(n=2, m=10)])
-        self.normalize = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std)])
-
-    def __call__(self, x):
-        weak = self.weak(x)
-        strong = self.strong(x)
-        return self.normalize(weak), self.normalize(strong)
-
-
-class CIFAR10SSL(datasets.CIFAR10):
-    def __init__(self, root, train_dataset, indexs, train=True,
-                 transform=None, target_transform=None,
-                 download=False):
-        super().__init__(root, train=train,
-                         transform=transform,
-                         target_transform=target_transform,
-                         download=download)
-        self.data = []
-        self.targets = []
-        self.correct_cnt = 0
-        
-        for idx in indexs:
-            #img, target = train_dataset(idx)
-            self.data.append(train_dataset.train_data[idx])
-            self.targets.append(train_dataset.train_noisy_labels[idx])
-            #self.targets.append(train_dataset.train_labels[idx].item())
-            if train_dataset.train_noisy_labels[idx] == train_dataset.train_labels[idx]:
-                self.correct_cnt += 1
-        cnt = collections.Counter(np.array(self.targets))
-        print("* idx distribution: ", cnt)
-        
-        #if indexs is not None:
-            #self.data = self.data[indexs] #self.data: from superclass
-            #self.targets = np.array(self.targets)[indexs]
-
-    def __getitem__(self, index):
-        img, target = self.data[index], self.targets[index]
-        img = Image.fromarray(img)
-
-        if self.transform is not None:
-            img = self.transform(img)   #Unlabeled 경우 weak, strong 모두 return
-
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
-        return img, target
-
-
-class CIFAR100SSL(datasets.CIFAR100):
-    def __init__(self, root, indexs, train=True,
-                 transform=None, target_transform=None,
-                 download=False):
-        super().__init__(root, train=train,
-                         transform=transform,
-                         target_transform=target_transform,
-                         download=download)
-        if indexs is not None:
-            self.data = self.data[indexs] #self.data: from superclass
-            self.targets = np.array(self.targets)[indexs]
-
-    def __getitem__(self, index):
-        img, target = self.data[index], self.targets[index]
-        img = Image.fromarray(img)
-
-        if self.transform is not None:
-            img = self.transform(img)
-
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
-        return img, target
-
-
+    
 DATASET_GETTERS = {'cifar10': get_cifar10,
                    'cifar100': get_cifar100}

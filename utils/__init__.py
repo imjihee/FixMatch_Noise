@@ -5,6 +5,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 
 def adjust_learning_rate(optimizer, epoch,max_epoch=200):
+	#STEP
 	if epoch < 0.25 * max_epoch:
 		lr = 0.01
 	elif epoch < 0.5 * max_epoch:
@@ -31,3 +32,11 @@ def evaluate(test_loader, model1):
 	model1.train()
 
 	return acc1
+
+def adjust_lambda(start, progress):
+	if progress<0.4:
+		return start
+	elif progress<0.7:
+		return (start+1)/2
+	else:
+		return 1

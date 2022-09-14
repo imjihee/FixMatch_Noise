@@ -27,13 +27,16 @@ import torchvision.transforms as transforms
 from torchvision import datasets
 
 from dataset.cifar import DATASET_GETTERS
-from dataset.cifar import CIFAR10SSL, TransformFixMatch
+from dataset.cifar import CIFAR10SSL, CIFAR100SSL, TransformFixMatch
 
 from utils import AverageMeter, accuracy
-from dataset.noisy_cifar import CIFAR10, CIFAR100
+from dataset.noisy_cifar import nCIFAR10, nCIFAR100
 from models.resnet import ResNet50, ResNet101
-from utils import evaluate, adjust_learning_rate
+from utils import evaluate, adjust_learning_rate, adjust_lambda
 import transform_ad
+
+import torchvision.models as models
+import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 best_acc = 0
@@ -147,6 +150,11 @@ def main():
     parser.add_argument('--mask_epoch', type=int, default=30)
     parser.add_argument('--ema_ensemble', action='store_true')
     parser.add_argument('--ema_train_only', action='store_true')
+    parser.add_argument('--ricap', action='store_true')
+    parser.add_argument('--ricap-beta', type=float, default=0.3)
+    parser.add_argument('--pretrain', action='store_true')
+
+    parser.add_argument('--lr-type', type=str, default='linear')
 
     args = parser.parse_args()
     global best_acc
@@ -258,7 +266,7 @@ def main():
     if args.dataset == 'cifar10':
         args.top_bn = False
         args.epoch_decay_start = 80
-        train_dataset = CIFAR10(root=args.result_dir,
+        train_dataset = nCIFAR10(root=args.result_dir,
                                 download=True,
                                 train=True,
                                 transform=transformer,
@@ -266,7 +274,7 @@ def main():
                                 noise_rate=args.noise_rate
                                 )
 
-        test_dataset_mask = CIFAR10(root=args.result_dir,
+        test_dataset_mask = nCIFAR10(root=args.result_dir,
                                download=True,
                                train=False,
                                transform=transforms.ToTensor(),
@@ -277,7 +285,7 @@ def main():
     if args.dataset == 'cifar100':
         args.top_bn = False
         args.epoch_decay_start = 100
-        train_dataset = CIFAR100(root=args.result_dir,
+        train_dataset = nCIFAR100(root=args.result_dir,
                                  download=True,
                                  train=True,
                                  transform=transformer,
@@ -285,7 +293,7 @@ def main():
                                  noise_rate=args.noise_rate
                                  )
 
-        test_dataset_mask = CIFAR100(root=args.result_dir,
+        test_dataset_mask = nCIFAR100(root=args.result_dir,
                                 download=True,
                                 train=False,
                                 transform=transforms.ToTensor(),
@@ -320,14 +328,23 @@ def main():
         transforms.ToTensor(),
         transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616))
     ])
+    if args.dataset == 'cifar10':
+        labeled_dataset = CIFAR10SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
+        unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
+        #pdb.set_trace()
+        test_dataset = datasets.CIFAR10(
+            './data', train=False, transform=transform_val, download=False)
+        correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
+        logger.info(f"  Correct_Accuracy = {correct_ac}")
 
-    labeled_dataset = CIFAR10SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
-    unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
-    #pdb.set_trace()
-    test_dataset = datasets.CIFAR10(
-        './data', train=False, transform=transform_val, download=False)
-    correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
-    logger.info(f"  Correct_Accuracy = {correct_ac}")
+    if args.dataset == 'cifar100':
+        labeled_dataset = CIFAR100SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
+        unlabeled_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        #pdb.set_trace()
+        test_dataset = datasets.CIFAR100(
+            './data', train=False, transform=transform_val, download=False)
+        correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
+        logger.info(f"  Correct_Accuracy = {correct_ac}")
 
     labeled_trainloader = DataLoader(
         labeled_dataset,
@@ -353,6 +370,19 @@ def main():
         torch.distributed.barrier()
 
     model = create_model(args)
+
+    if args.pretrain:
+        if args.arch == 'wideresnet':
+            pretrain = models.resnet50(pretrained=True)
+        else:
+            pretrain = models.resnext50_32x4d(pretrained=True)
+
+        fc_in = model.fc.in_features
+        pretrain.fc = nn.Linear(fc_in, args.num_classes)
+        try:
+            model.load_state_dict(pretrain.state_dict(), strict=False)
+        except RuntimeError as e:
+            print('Ignoring "' + str(e) + '"')
 
     if args.local_rank == 0:
         torch.distributed.barrier()
@@ -519,6 +549,7 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
 
     labeled_iter = iter(labeled_trainloader)
     unlabeled_iter = iter(unlabeled_trainloader)
+    criterion = nn.CrossEntropyLoss().cuda()
 
     model.train()
     for epoch in range(args.start_epoch, args.epochs):
@@ -545,50 +576,73 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
 
             #unlabeled data
             try:
-                (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next()
+                (inputs_u_w,inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next()
             except: #dataloader 모두 순회한 경우, epoch+=1
                 if args.world_size > 1:
                     unlabeled_epoch += 1
                     unlabeled_trainloader.sampler.set_epoch(unlabeled_epoch)
                 unlabeled_iter = iter(unlabeled_trainloader)
-                (inputs_u_w, inputs_u_s), _ = unlabeled_iter.next() #weak, strong - return only image, not target
+                (inputs_u_w,inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next() #weak, strong - return only image, not target
+                
+            """ricap dataset"""
+            if args.ricap:
+                I_x, I_y = inputs_x.size()[2:]
+
+                w = int(np.round(I_x * np.random.beta(args.ricap_beta, args.ricap_beta)))
+                h = int(np.round(I_y * np.random.beta(args.ricap_beta, args.ricap_beta)))
+                w_ = [w, I_x - w, w, I_x - w]
+                h_ = [h, h, I_y - h, I_y - h]
+
+                cropped_images = {}
+                c_ = {}
+                W_ = {}
+                for k in range(4):
+                    idx = torch.randperm(inputs_x.size(0))
+                    x_k = np.random.randint(0, I_x - w_[k] + 1)
+                    y_k = np.random.randint(0, I_y - h_[k] + 1)
+                    cropped_images[k] = inputs_x[idx][:, :, x_k:x_k + w_[k], y_k:y_k + h_[k]]
+                    c_[k] = target[idx].cuda()
+                    W_[k] = w_[k] * h_[k] / (I_x * I_y)
+
+                patched_images = torch.cat(
+                    (torch.cat((cropped_images[0], cropped_images[1]), 2),
+                    torch.cat((cropped_images[2], cropped_images[3]), 2)), 3)
+                inputs_x = patched_images
+            """ricap dataset end"""
 
             data_time.update(time.time() - end)
             batch_size = inputs_x.shape[0]
             inputs = interleave(
-                torch.cat((inputs_x, inputs_u_w, inputs_u_s)), 2*args.mu+1).to(args.device) #torch.Size([960, 3, 32, 32])
+                torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), 2*args.mu+1).to(args.device) #torch.Size([960, 3, 32, 32])
             targets_x = targets_x.to(args.device)
             """Start Training"""
             logits = model(inputs)
 
             logits = de_interleave(logits, 2*args.mu+1)
-            #logits_x, logits_u_w, logits_u_s: 각 labeled, unlabeled_weak, unlabeled_strong에 대한 logits
+            #logits_x, logits_u_w, logits_u_w2, logits_u_s: 각 labeled, unlabeled_weak, unlabeled_strong에 대한 logits
             logits_x = logits[:batch_size]
-            logits_u_w, logits_u_s = logits[batch_size:].chunk(2)
+            logits_u_w, logits_u_w2, logits_u_s = logits[batch_size:].chunk(3)
             del logits
             """EMA logits - labeled data"""
             logits_ema = model_ema(inputs)
             logits_ema = de_interleave(logits_ema, 2*args.mu+1)
 
             logits_x_ema = logits_ema[:batch_size]
-            logits_u_w_ema, logits_u_s_ema = logits_ema[batch_size:].chunk(2)
+            logits_u_w_ema, logits_u_w2_ema, logits_u_s_ema = logits_ema[batch_size:].chunk(3)
             del logits_ema
 
-            """If ema_ensemble"""
+            if args.ricap:
+                loss = sum([W_[k] * criterion(logits_x, c_[k]) for k in range(4)])
+            else:
+                Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
+
             if args.ema_ensemble:
-                logits_x = (logits_x + logits_x_ema) / 2
-
-            Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
-
+                logits_u_w = (logits_u_w + logits_u_w2 + logits_u_w_ema + logits_u_w2_ema)/4
             pseudo_label = torch.softmax(logits_u_w.detach()/args.T, dim=-1)
-            pseudo_label_ema = torch.softmax(logits_u_w_ema.detach()/args.T, dim=-1)
+            
             #torch.max: return values, indices
             max_probs, targets_u = torch.max(pseudo_label, dim=-1)
-            max_probs_ema, targets_u_ema = torch.max(pseudo_label_ema, dim=-1)
 
-            if args.ema_ensemble:
-                max_probs = (max_probs + max_probs_ema) / 2
-                logits_u_s = (logits_u_s + logits_u_s_ema) / 2
             #ge: check if >=
             mask = max_probs.ge(args.threshold).float() #pseudo-labeling
 
@@ -596,8 +650,11 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
 
             Lu = (F.cross_entropy(logits_u_s, targets_u,
                                   reduction='none') * mask).mean()
+            
             """Final loss"""
-            loss = Lx + args.lambda_u * Lu
+            #lambda_ = adjust_lambda(args.lambda_u, (epoch+1)/args.epochs)
+            lambda_ = args.lambda_u
+            loss = Lx + lambda_ * Lu
 
             if args.amp:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:

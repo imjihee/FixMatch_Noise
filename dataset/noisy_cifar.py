@@ -1,3 +1,4 @@
+"""From O2U Net"""
 from __future__ import print_function
 from PIL import Image
 import os
@@ -14,7 +15,7 @@ import torch.utils.data as data
 from .utils import download_url, check_integrity, noisify
 
 
-class CIFAR10(data.Dataset):
+class nCIFAR10(data.Dataset):
     """`CIFAR10 <https://www.cs.toronto.edu/~kriz/cifar.html>`_ Dataset.
 
     Args:
@@ -206,7 +207,7 @@ class CIFAR10(data.Dataset):
 """ CIFAR 100 """
 
 
-class CIFAR100(data.Dataset):
+class nCIFAR100(data.Dataset):
     """`CIFAR100 <https://www.cs.toronto.edu/~kriz/cifar.html>`_ Dataset.
 
     Args:
