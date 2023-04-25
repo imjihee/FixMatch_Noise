@@ -1,5 +1,5 @@
 from .misc import *
-
+import pdb
 import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
@@ -21,7 +21,7 @@ def evaluate(test_loader, model1):
 	correct1 = 0
 	total1 = 0
 	for images, labels, _ in test_loader:
-		images = Variable(images).cuda()
+		images = Variable(images).cuda() #([128, 400, 400, 3])
 
 		logits1 = model1(images)
 		outputs1 = F.log_softmax(logits1, dim=1)

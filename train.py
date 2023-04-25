@@ -38,6 +38,8 @@ import transform_ad
 import torchvision.models as models
 import torch.nn as nn
 
+from nepes_dataset import create_dataset
+
 logger = logging.getLogger(__name__)
 best_acc = 0
 
@@ -89,8 +91,8 @@ def main():
                         help='id(s) for CUDA_VISIBLE_DEVICES')
     parser.add_argument('--num-workers', type=int, default=4,
                         help='number of workers')
-    parser.add_argument('--dataset', default='cifar10', type=str,
-                        choices=['cifar10', 'cifar100'],
+    parser.add_argument('--dataset', default='nepes', type=str,
+                        choices=['cifar10', 'cifar100', 'nepes'],
                         help='dataset name')
     parser.add_argument('--num-labeled', type=int, default=4000,
                         help='number of labeled data')
@@ -155,6 +157,13 @@ def main():
     parser.add_argument('--pretrain', action='store_true')
 
     parser.add_argument('--lr-type', type=str, default='linear')
+
+    parser.add_argument('--path', type=str, default='//')
+    parser.add_argument('--augmentation', type=str, default='')
+    parser.add_argument('--use-eval', action='store_true')
+
+    parser.add_argument('--save-path', type=str, default='./save/')
+
 
     args = parser.parse_args()
     global best_acc
@@ -246,6 +255,16 @@ def main():
             args.model_cardinality = 8
             args.model_depth = 29
             args.model_width = 64
+    
+    elif args.dataset == 'nepes':
+        args.num_classes = 22
+        if args.arch == 'wideresnet':
+            args.model_depth = 28
+            args.model_width = 2
+        elif args.arch == 'resnext':
+            args.model_cardinality = 4
+            args.model_depth = 28
+            args.model_width = 4
 
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
@@ -300,12 +319,21 @@ def main():
                                 noise_type=args.noise_type,
                                 noise_rate=args.noise_rate
                                 )
+        
+    if args.dataset == 'nepes':
+        args.top_bn = False
+        args.epoch_decay_start = 100
+        train_dataset, test_dataset_mask = create_dataset(args, args.path, is_train=True)
+        #test_dataset_mask = create_dataset(args, args.path, is_train=False)
     if args.local_rank == 0:
         torch.distributed.barrier()
         
     remove_rate = args.remove_rate
 
-    mask = masking(args, train_dataset, test_dataset_mask, remove_rate)
+    if args.dataset=='nepes':
+        mask = masking_nepes(args, train_dataset, test_dataset_mask, remove_rate)
+    else:
+        mask = masking(args, train_dataset, test_dataset_mask, remove_rate)
 
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler 
     #distributedsampler: batch dataset을 core만큼 나눔
@@ -343,6 +371,14 @@ def main():
         #pdb.set_trace()
         test_dataset = datasets.CIFAR100(
             './data', train=False, transform=transform_val, download=False)
+        correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
+        logger.info(f"  Correct_Accuracy = {correct_ac}")
+    
+    if args.dataset == 'nepes':
+        labeled_dataset = CIFAR100SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
+        unlabeled_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        test_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+
         correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
         logger.info(f"  Correct_Accuracy = {correct_ac}")
 
@@ -532,6 +568,90 @@ def masking(args, train_dataset, test_dataset, remove_rate):
 
     return best_mask
 
+def masking_nepes(args, train_dataset, test_dataset, remove_rate):
+    network = ResNet50(input_channel=3, n_outputs = args.num_classes).cuda()
+
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
+                                                    batch_size=64,
+                                                    num_workers=args.num_workers,
+                                                    shuffle=True, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(
+        dataset=test_dataset, batch_size=128,
+        num_workers=args.num_workers, shuffle=False, pin_memory=False)
+
+    optimizer1 = torch.optim.SGD(network.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+    criterion = torch.nn.CrossEntropyLoss(reduce=False, ignore_index=-1).cuda()
+
+    noise_or_not = len(train_dataset)
+    print("train dataset 길이: ", noise_or_not)
+    moving_loss_dic = np.zeros_like(noise_or_not)
+    ndata = train_dataset.__len__()
+    best_mask_acc = 0
+
+    for epoch in range(1, args.mask_epoch):
+        # train models
+        globals_loss = 0
+        network.train()
+        with torch.no_grad():
+            accuracy = evaluate(test_loader, network)
+        example_loss = np.zeros_like(noise_or_not, dtype=float)
+
+        # Learning Rate Scheduling
+        t = (epoch % 10 + 1) / float(10)  # 40: lr frequency
+        lr = (1 - t) * 0.01 + t * 0.001  # default _ 0.01: max, 0.001: min lr
+
+        for param_group in optimizer1.param_groups:
+            param_group['lr'] = lr
+
+        for i, (images, labels, indexes) in enumerate(train_loader):
+
+            images = Variable(images).cuda()
+            labels = Variable(labels).cuda()
+
+            logits = network(images)
+            loss_1 = criterion(logits, labels)
+
+            for pi, cl in zip(indexes, loss_1):
+                example_loss[pi] = cl.cpu().data.item()
+
+            globals_loss += loss_1.sum().cpu().data.item()
+
+            loss_1 = loss_1.mean()
+            optimizer1.zero_grad()
+            loss_1.backward()
+            optimizer1.step()  # training in an epoch finish
+
+        example_loss = example_loss - example_loss.mean()
+        moving_loss_dic = moving_loss_dic + example_loss  # moving_loss_dic: ndarray, (50000,0)
+
+        ind_1_sorted = np.argsort(moving_loss_dic)  # moving_loss_dic를 오름차순 정렬하는 인덱스의 array 반환.
+        loss_1_sorted = moving_loss_dic[ind_1_sorted]
+
+        remember_rate = 1 - remove_rate  # 남길 데이터 비율
+        num_remember = int(remember_rate * len(loss_1_sorted))  # num_remember: 40000 @ remove_rate=0.2
+
+        noise_accuracy = np.sum(noise_or_not[ind_1_sorted[num_remember:]]) / float(
+            len(loss_1_sorted) - num_remember)  # 제거할 데이터 중 노이즈 개수 / 총 노이즈 개수
+        mask = np.ones_like(noise_or_not, dtype=np.float32)
+        mask[ind_1_sorted[num_remember:]] = 0  # 지워야 할 인덱스에 대해 0 저장. mask[idx]=0
+
+        correct_acc = np.sum(np.logical_and(mask, noise_or_not)) / (np.sum(mask))
+        if correct_acc>best_mask_acc:
+            best_mask_acc = correct_acc
+            best_mask = mask
+
+        top_accuracy_rm = int(0.9 * len(loss_1_sorted))
+        top_accuracy = 1 - np.sum(noise_or_not[ind_1_sorted[top_accuracy_rm:]]) / float(
+            len(loss_1_sorted) - top_accuracy_rm)
+
+        print("Masking - " + "epoch:%d" % epoch, "lr:%f" % lr, "train_loss:", globals_loss / ndata,
+              "test_accuarcy:%f" % accuracy, "!!noise_accuracy:%f" % (correct_acc),
+              "!! top 0.1 noise accuracy:%f" % top_accuracy)
+        logger.info('epoch: {:d}'.format(epoch))
+        logger.info('noise accuracy: {:.2f}'.format(correct_acc))
+        logger.info('test accuracy: {:.2f}'.format(accuracy))
+
+    return best_mask
 
 def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
           model, optimizer, ema_model, scheduler):
