@@ -77,7 +77,7 @@ def get_cosine_schedule_with_warmup(optimizer,
 
 def interleave(x, size):
     s = list(x.shape)
-    return x.reshape([-1, size] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
+    return x.reshape([-1, size] + s[1:]).tratnspose(0, 1).reshape([-1] + s[1:])
 
 
 def de_interleave(x, size):
@@ -359,7 +359,7 @@ def main():
     if args.dataset == 'cifar10':
         labeled_dataset = CIFAR10SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
         unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
-        #pdb.set_trace()
+        
         test_dataset = datasets.CIFAR10(
             './data', train=False, transform=transform_val, download=False)
         correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
@@ -368,7 +368,7 @@ def main():
     if args.dataset == 'cifar100':
         labeled_dataset = CIFAR100SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
         unlabeled_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
-        #pdb.set_trace()
+       
         test_dataset = datasets.CIFAR100(
             './data', train=False, transform=transform_val, download=False)
         correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
@@ -732,8 +732,9 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
 
             data_time.update(time.time() - end)
             batch_size = inputs_x.shape[0]
+            pdb.set_trace()
             inputs = interleave(
-                torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), 2*args.mu+1).to(args.device) #torch.Size([960, 3, 32, 32])
+                torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), 2*args.mu+1).to(args.device) #torch.cat: torch.Size([960, 3, 32, 32])
             targets_x = targets_x.to(args.device)
             """Start Training"""
             logits = model(inputs)
