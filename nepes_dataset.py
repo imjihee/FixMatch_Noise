@@ -1,4 +1,5 @@
 import os
+import collections
 from typing import Callable, Tuple
 import pickle
 
@@ -224,21 +225,20 @@ class Nepes_SSL():
     def __init__(self, root, train_dataset, indexs, train=True,
                  transform=None, target_transform=None,
                  download=False):
-        super().__init__(root, train=train,
-                         transform=transform,
-                         target_transform=target_transform,
-                         download=download)
+        
+        self.transform = transform
         self.data = []
         self.targets = []
-        self.correct_cnt = 0
 
         for idx in indexs:
             #img, target = train_dataset(idx)
-            self.data.append(train_dataset.train_data[idx])
-            self.targets.append(train_dataset.train_noisy_labels[idx])
+            img, target = train_dataset.path_list[idx]
+            data = Image.open(img)
+            data = np.array(data)
+            self.data.append(data)
+            self.targets.append(target)
             #self.targets.append(train_dataset.train_labels[idx].item())
-            if train_dataset.train_noisy_labels[idx] == train_dataset.train_labels[idx]:
-                self.correct_cnt += 1
+
         cnt = collections.Counter(np.array(self.targets))
         print("* idx distribution: ", cnt)
 
@@ -249,7 +249,8 @@ class Nepes_SSL():
         if self.transform is not None:
             img = self.transform(img)
 
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
         return img, target
+    
+    def __len__(self):
+        return len(self.data)
+    

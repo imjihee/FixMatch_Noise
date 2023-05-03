@@ -38,7 +38,7 @@ import transform_ad
 import torchvision.models as models
 import torch.nn as nn
 
-from nepes_dataset import create_dataset
+from nepes_dataset import create_dataset, Nepes_SSL
 from models.resnet_g import build_resnet
 
 logger = logging.getLogger(__name__)
@@ -379,9 +379,9 @@ def main():
         logger.info(f"  Correct_Accuracy = {correct_ac}")
     
     if args.dataset == 'nepes':
-        labeled_dataset = Nepes_SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
-        unlabeled_dataset = Nepes_SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
-        test_dataset = Nepes_SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        labeled_dataset = Nepes_SSL(args.path, train_dataset, labeled_idx, train=True, transform = transform_labeled)
+        unlabeled_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        test_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
 
         #correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
         #logger.info(f"  Correct_Accuracy = {correct_ac}")
