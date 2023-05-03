@@ -21,23 +21,23 @@ normal_std = (0.5, 0.5, 0.5)
 
 
 class TransformFixMatch(object):
-    def __init__(self, mean, std):
+    def __init__(self,cropsize, mean, std):
         self.weak = transforms.Compose([
             transforms.RandomHorizontalFlip(),
             transforms.RandomVerticalFlip(),
-            transforms.RandomCrop(size=32,
-                                  padding=int(32*0.125),
+            transforms.RandomCrop(size=cropsize,
+                                  padding=int(cropsize*0.125),
                                   padding_mode='reflect')])
         self.weak2 = transforms.Compose([
             #transforms.RandomGrayscale(),
             #transforms.RandomRotation(degrees=10),
-            transforms.RandomCrop(size=32,
-                                  padding=int(32*0.125),
+            transforms.RandomCrop(size=cropsize,
+                                  padding=int(cropsize*0.125),
                                   padding_mode='reflect')])
         self.strong = transforms.Compose([
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(size=32,
-                                  padding=int(32*0.125),
+            transforms.RandomCrop(size=cropsize,
+                                  padding=int(cropsize*0.125),
                                   padding_mode='reflect'),
             RandAugmentMC(n=2, m=10)])
         self.normalize = transforms.Compose([

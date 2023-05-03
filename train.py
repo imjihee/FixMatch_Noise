@@ -78,7 +78,7 @@ def get_cosine_schedule_with_warmup(optimizer,
 
 def interleave(x, size):
     s = list(x.shape)
-    return x.reshape([-1, size] + s[1:]).tratnspose(0, 1).reshape([-1] + s[1:])
+    return x.reshape([-1, size] + s[1:]).transpose(0, 1).reshape([-1] + s[1:])
 
 
 def de_interleave(x, size):
@@ -137,7 +137,7 @@ def main():
     parser.add_argument('--seed', default=None, type=int,
                         help="random seed")
     parser.add_argument("--amp", action="store_true",
-                        help="use 16-bit (mixed) precision through NVIDIA apex AMP")
+                        help="use 16-bit (mixed) precision tfshrough NVIDIA apex AMP")
     parser.add_argument("--opt_level", type=str, default="O1",
                         help="apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
                         "See details at https://nvidia.github.io/apex/amp.html")
@@ -187,7 +187,15 @@ def main():
     print(args)
 
     def create_model(args):
-        if args.arch == 'wideresnet':
+        if args.dataset=='nepes':
+            print("*** build_resnet50_nepes_model ***")
+            model = build_resnet('resnet50','fanin')
+            if model.fc.out_features != args.num_classes:
+                    fc_in = model.fc.in_features
+                    model.fc = nn.Linear(fc_in, args.num_classes)
+                    model.fc.reset_parameters()
+
+        elif args.arch == 'wideresnet':
             import models.wideresnet as models
             model = models.build_wideresnet(depth=args.model_depth,
                                             widen_factor=args.model_width,
@@ -347,11 +355,14 @@ def main():
     unlabeled_idx = np.array(range(len(mask)))
 
     #print("* Labeled Index Length: ", len(clear_idx), "*Expanded Index Length: ", len(labeled_idx))
+    cropsize=32
+    if args.dataset=="nepes":
+        cropsize=400
 
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=32,
-                              padding=int(32 * 0.125),
+        transforms.RandomCrop(cropsize,
+                              padding=int(cropsize * 0.125),
                               padding_mode='reflect'),
         transforms.ToTensor(),
         transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616))
@@ -362,7 +373,7 @@ def main():
     ])
     if args.dataset == 'cifar10':
         labeled_dataset = CIFAR10SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
-        unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
+        unlabeled_dataset = CIFAR10SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616)))
         
         test_dataset = datasets.CIFAR10(
             './data', train=False, transform=transform_val, download=False)
@@ -371,7 +382,7 @@ def main():
 
     if args.dataset == 'cifar100':
         labeled_dataset = CIFAR100SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
-        unlabeled_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        unlabeled_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
        
         test_dataset = datasets.CIFAR100(
             './data', train=False, transform=transform_val, download=False)
@@ -380,8 +391,8 @@ def main():
     
     if args.dataset == 'nepes':
         labeled_dataset = Nepes_SSL(args.path, train_dataset, labeled_idx, train=True, transform = transform_labeled)
-        unlabeled_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
-        test_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        unlabeled_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        test_dataset = test_dataset_mask
 
         #correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
         #logger.info(f"  Correct_Accuracy = {correct_ac}")
@@ -717,35 +728,42 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
                     unlabeled_epoch += 1
                     unlabeled_trainloader.sampler.set_epoch(unlabeled_epoch)
                 unlabeled_iter = iter(unlabeled_trainloader)
-                (inputs_u_w,inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next() #weak, strong - return only image, not target
+                (inputs_u_w, inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next() #weak, strong - return only image, not target
 
 
             data_time.update(time.time() - end)
             batch_size = inputs_x.shape[0]
 
+            #pdb.set_trace()
+
+            mul=3*args.mu+1 #inputs_u_w2까지 쓰는 경우.3 곱해줌. 아니면 2 곱해줌.
+
             inputs = interleave(
-                torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), 2*args.mu+1).to(args.device) #torch.cat: torch.Size([960, 3, 32, 32])
+                torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), mul).to(args.device) #torch.cat(cifar!): torch.Size([960, 3, 32, 32])
+                #torch.cat(nepes!): torch.Size([704, 3, 400, 400])
+
             targets_x = targets_x.to(args.device)
+
+            
+
             """Start Training"""
             logits = model(inputs)
 
-            logits = de_interleave(logits, 2*args.mu+1)
+            logits = de_interleave(logits, mul)
             #logits_x, logits_u_w, logits_u_w2, logits_u_s: 각 labeled, unlabeled_weak, unlabeled_strong에 대한 logits
             logits_x = logits[:batch_size]
             logits_u_w, logits_u_w2, logits_u_s = logits[batch_size:].chunk(3)
             del logits
+
             """EMA logits - labeled data"""
             logits_ema = model_ema(inputs)
-            logits_ema = de_interleave(logits_ema, 2*args.mu+1)
+            logits_ema = de_interleave(logits_ema, mul)
 
             logits_x_ema = logits_ema[:batch_size]
             logits_u_w_ema, logits_u_w2_ema, logits_u_s_ema = logits_ema[batch_size:].chunk(3)
             del logits_ema
 
-            if args.ricap:
-                loss = sum([W_[k] * criterion(logits_x, c_[k]) for k in range(4)])
-            else:
-                Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
+            Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
 
             if args.ema_ensemble:
                 logits_u_w = (logits_u_w + logits_u_w2 + logits_u_w_ema + logits_u_w2_ema)/4
@@ -756,8 +774,6 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
 
             #ge: check if >=
             mask = max_probs.ge(args.threshold).float() #pseudo-labeling
-
-            #pdb.set_trace()
 
             Lu = (F.cross_entropy(logits_u_s, targets_u,
                                   reduction='none') * mask).mean()
