@@ -39,6 +39,7 @@ import torchvision.models as models
 import torch.nn as nn
 
 from nepes_dataset import create_dataset
+from models.resnet_g import build_resnet
 
 logger = logging.getLogger(__name__)
 best_acc = 0
@@ -325,6 +326,8 @@ def main():
         args.epoch_decay_start = 100
         train_dataset, test_dataset_mask = create_dataset(args, args.path, is_train=True)
         #test_dataset_mask = create_dataset(args, args.path, is_train=False)
+        print("*** nepes dataset ready ***")
+
     if args.local_rank == 0:
         torch.distributed.barrier()
         
@@ -332,6 +335,7 @@ def main():
 
     if args.dataset=='nepes':
         mask = masking_nepes(args, train_dataset, test_dataset_mask, remove_rate)
+        print("*** nepes dataset masking ready ***")
     else:
         mask = masking(args, train_dataset, test_dataset_mask, remove_rate)
 
@@ -569,14 +573,23 @@ def masking(args, train_dataset, test_dataset, remove_rate):
     return best_mask
 
 def masking_nepes(args, train_dataset, test_dataset, remove_rate):
-    network = ResNet50(input_channel=3, n_outputs = args.num_classes).cuda()
+
+    #network = ResNet50(input_channel=3, n_outputs = args.num_classes).cuda()
+    #모델수정
+    network = build_resnet('resnet50','fanin')
+    if network.fc.out_features != args.num_classes:
+            fc_in = network.fc.in_features
+            network.fc = nn.Linear(fc_in, args.num_classes)
+            network.fc.reset_parameters()
+    network = network.cuda()
+    #끝
 
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                                    batch_size=64,
+                                                    batch_size=4,
                                                     num_workers=args.num_workers,
                                                     shuffle=True, pin_memory=True)
     test_loader = torch.utils.data.DataLoader(
-        dataset=test_dataset, batch_size=128,
+        dataset=test_dataset, batch_size=32,
         num_workers=args.num_workers, shuffle=False, pin_memory=False)
 
     optimizer1 = torch.optim.SGD(network.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
@@ -732,7 +745,7 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
 
             data_time.update(time.time() - end)
             batch_size = inputs_x.shape[0]
-            pdb.set_trace()
+
             inputs = interleave(
                 torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), 2*args.mu+1).to(args.device) #torch.cat: torch.Size([960, 3, 32, 32])
             targets_x = targets_x.to(args.device)

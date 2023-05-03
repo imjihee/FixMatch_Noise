@@ -101,7 +101,7 @@ def create_dataset(args, data_root, is_train: bool):
             classes_list.remove(c)
     classes = {name: i for i, name in enumerate(classes_list)}
 
-    args.classes = len(classes)
+    args.num_classes = len(classes)
     train_transform = create_nepes_transform(args, is_train=True)
     val_transform = create_nepes_transform(args, is_train=False)
     
