@@ -219,3 +219,37 @@ def create_nepes_transform(args, is_train: bool) -> Callable:
          ]
 
     return albumentations.Compose(transforms)
+
+class Nepes_SSL():
+    def __init__(self, root, train_dataset, indexs, train=True,
+                 transform=None, target_transform=None,
+                 download=False):
+        super().__init__(root, train=train,
+                         transform=transform,
+                         target_transform=target_transform,
+                         download=download)
+        self.data = []
+        self.targets = []
+        self.correct_cnt = 0
+
+        for idx in indexs:
+            #img, target = train_dataset(idx)
+            self.data.append(train_dataset.train_data[idx])
+            self.targets.append(train_dataset.train_noisy_labels[idx])
+            #self.targets.append(train_dataset.train_labels[idx].item())
+            if train_dataset.train_noisy_labels[idx] == train_dataset.train_labels[idx]:
+                self.correct_cnt += 1
+        cnt = collections.Counter(np.array(self.targets))
+        print("* idx distribution: ", cnt)
+
+    def __getitem__(self, index):
+        img, target = self.data[index], self.targets[index]
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target

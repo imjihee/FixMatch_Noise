@@ -379,12 +379,12 @@ def main():
         logger.info(f"  Correct_Accuracy = {correct_ac}")
     
     if args.dataset == 'nepes':
-        labeled_dataset = CIFAR100SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
-        unlabeled_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
-        test_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        labeled_dataset = Nepes_SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
+        unlabeled_dataset = Nepes_SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        test_dataset = Nepes_SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
 
-        correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
-        logger.info(f"  Correct_Accuracy = {correct_ac}")
+        #correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
+        #logger.info(f"  Correct_Accuracy = {correct_ac}")
 
     labeled_trainloader = DataLoader(
         labeled_dataset,
@@ -597,9 +597,10 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
 
     noise_or_not = len(train_dataset)
     print("train dataset 길이: ", noise_or_not)
-    moving_loss_dic = np.zeros_like(noise_or_not)
+    moving_loss_dic = np.zeros(noise_or_not)
     ndata = train_dataset.__len__()
-    best_mask_acc = 0
+    #best_mask_acc = 0
+    
 
     for epoch in range(1, args.mask_epoch):
         # train models
@@ -607,7 +608,7 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
         network.train()
         with torch.no_grad():
             accuracy = evaluate(test_loader, network)
-        example_loss = np.zeros_like(noise_or_not, dtype=float)
+        example_loss = np.zeros([noise_or_not], dtype=float) #수정
 
         # Learning Rate Scheduling
         t = (epoch % 10 + 1) / float(10)  # 40: lr frequency
@@ -625,6 +626,7 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
             loss_1 = criterion(logits, labels)
 
             for pi, cl in zip(indexes, loss_1):
+                
                 example_loss[pi] = cl.cpu().data.item()
 
             globals_loss += loss_1.sum().cpu().data.item()
@@ -642,26 +644,26 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
 
         remember_rate = 1 - remove_rate  # 남길 데이터 비율
         num_remember = int(remember_rate * len(loss_1_sorted))  # num_remember: 40000 @ remove_rate=0.2
-
+        """
         noise_accuracy = np.sum(noise_or_not[ind_1_sorted[num_remember:]]) / float(
             len(loss_1_sorted) - num_remember)  # 제거할 데이터 중 노이즈 개수 / 총 노이즈 개수
-        mask = np.ones_like(noise_or_not, dtype=np.float32)
+        """
+        mask = np.ones(noise_or_not, dtype=np.float32)
         mask[ind_1_sorted[num_remember:]] = 0  # 지워야 할 인덱스에 대해 0 저장. mask[idx]=0
+        
+        #correct_acc = np.sum(np.logical_and(mask, noise_or_not)) / (np.sum(mask))
+        #if correct_acc>best_mask_acc:
+        #    best_mask_acc = correct_acc
+        #    best_mask = mask
+        best_mask = mask
 
-        correct_acc = np.sum(np.logical_and(mask, noise_or_not)) / (np.sum(mask))
-        if correct_acc>best_mask_acc:
-            best_mask_acc = correct_acc
-            best_mask = mask
-
-        top_accuracy_rm = int(0.9 * len(loss_1_sorted))
-        top_accuracy = 1 - np.sum(noise_or_not[ind_1_sorted[top_accuracy_rm:]]) / float(
-            len(loss_1_sorted) - top_accuracy_rm)
+        #top_accuracy_rm = int(0.9 * len(loss_1_sorted))
+        #top_accuracy = 1 - np.sum(noise_or_not[ind_1_sorted[top_accuracy_rm:]]) / float(
+        #    len(loss_1_sorted) - top_accuracy_rm)
 
         print("Masking - " + "epoch:%d" % epoch, "lr:%f" % lr, "train_loss:", globals_loss / ndata,
-              "test_accuarcy:%f" % accuracy, "!!noise_accuracy:%f" % (correct_acc),
-              "!! top 0.1 noise accuracy:%f" % top_accuracy)
+              "test_accuarcy:%f" % accuracy)
         logger.info('epoch: {:d}'.format(epoch))
-        logger.info('noise accuracy: {:.2f}'.format(correct_acc))
         logger.info('test accuracy: {:.2f}'.format(accuracy))
 
     return best_mask
@@ -716,32 +718,7 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
                     unlabeled_trainloader.sampler.set_epoch(unlabeled_epoch)
                 unlabeled_iter = iter(unlabeled_trainloader)
                 (inputs_u_w,inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next() #weak, strong - return only image, not target
-                
-            """ricap dataset"""
-            if args.ricap:
-                I_x, I_y = inputs_x.size()[2:]
 
-                w = int(np.round(I_x * np.random.beta(args.ricap_beta, args.ricap_beta)))
-                h = int(np.round(I_y * np.random.beta(args.ricap_beta, args.ricap_beta)))
-                w_ = [w, I_x - w, w, I_x - w]
-                h_ = [h, h, I_y - h, I_y - h]
-
-                cropped_images = {}
-                c_ = {}
-                W_ = {}
-                for k in range(4):
-                    idx = torch.randperm(inputs_x.size(0))
-                    x_k = np.random.randint(0, I_x - w_[k] + 1)
-                    y_k = np.random.randint(0, I_y - h_[k] + 1)
-                    cropped_images[k] = inputs_x[idx][:, :, x_k:x_k + w_[k], y_k:y_k + h_[k]]
-                    c_[k] = target[idx].cuda()
-                    W_[k] = w_[k] * h_[k] / (I_x * I_y)
-
-                patched_images = torch.cat(
-                    (torch.cat((cropped_images[0], cropped_images[1]), 2),
-                    torch.cat((cropped_images[2], cropped_images[3]), 2)), 3)
-                inputs_x = patched_images
-            """ricap dataset end"""
 
             data_time.update(time.time() - end)
             batch_size = inputs_x.shape[0]
