@@ -33,6 +33,23 @@ def evaluate(test_loader, model1):
 
 	return acc1
 
+def evaluate_nepes(test_loader, model1):
+	model1.eval()
+	correct1 = 0
+	total1 = 0
+	for images, labels in test_loader:
+		images = Variable(images).cuda() #([128, 400, 400, 3])
+
+		logits1 = model1(images)
+		outputs1 = F.log_softmax(logits1, dim=1)
+		_, pred1 = torch.max(outputs1.data, 1)
+		total1 += labels.size(0)
+		correct1 += (pred1.cpu() == labels).sum()
+	acc1 = 100 * float(correct1) / float(total1)
+	model1.train()
+
+	return acc1
+
 def adjust_lambda(start, progress):
 	if progress<0.4:
 		return start

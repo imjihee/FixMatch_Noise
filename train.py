@@ -32,7 +32,7 @@ from dataset.cifar import CIFAR10SSL, CIFAR100SSL, TransformFixMatch
 from utils import AverageMeter, accuracy
 from dataset.noisy_cifar import nCIFAR10, nCIFAR100
 from models.resnet import ResNet50, ResNet101
-from utils import evaluate, adjust_learning_rate, adjust_lambda
+from utils import evaluate, adjust_learning_rate, adjust_lambda, evaluate_nepes
 import transform_ad
 
 import torchvision.models as models
@@ -384,6 +384,7 @@ def main():
         labeled_dataset = CIFAR100SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
         unlabeled_dataset = CIFAR100SSL('./data', train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
        
+       #torchvision datasets https://github.com/pytorch/vision/blob/main/torchvision/datasets/cifar.py
         test_dataset = datasets.CIFAR100(
             './data', train=False, transform=transform_val, download=False)
         correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
@@ -618,7 +619,7 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
         globals_loss = 0
         network.train()
         with torch.no_grad():
-            accuracy = evaluate(test_loader, network)
+            accuracy = evaluate_nepes(test_loader, network)
         example_loss = np.zeros([noise_or_not], dtype=float) #수정
 
         # Learning Rate Scheduling

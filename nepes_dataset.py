@@ -84,6 +84,43 @@ class BasicDataset(Dataset):
 
     def __len__(self):
         return len(self.path_list)
+    
+class BasicTestDataset(Dataset):
+    def __init__(self, args, path_list, transform=None):
+        super(BasicTestDataset, self).__init__()
+        self.path_list = path_list
+        self.transform = transform
+        self.args = args
+
+        data_list = []
+        if len(self.path_list) < 1000:
+            # if the size of dataset is small, load all of them for faster speed
+            for i in range(len(self.path_list)):
+                img, c = self.path_list[i]
+                img = Image.open(img)
+                img1 = np.ar78ray(img)
+                data_list.append((img1, c))
+            self.data_list = data_list
+        else:
+            # if the size of dataset is big, load a batch at each iteration
+            self.data_list = None
+
+    def __getitem__(self, index):
+        if self.data_list:
+            img, c = self.data_list[index]
+        else:
+            path, c = self.path_list[index]
+            img = Image.open(path)
+            img = np.array(img)
+        if self.transform:
+            #else:
+            img = self.transform(**{'image': img}) #type(img): dict, img['image'].shape: (256, 256, 3), ndarray type
+            img = torch.tensor(img['image'])
+        img = np.array(torch.tensor(img).float()).transpose((2,0,1))
+        return img, c
+
+    def __len__(self):
+        return len(self.path_list)
 
 def create_dataset(args, data_root, is_train: bool):
     separated_train_val = 'train' in os.listdir(data_root)
@@ -166,10 +203,10 @@ def create_dataset(args, data_root, is_train: bool):
 
     if is_train:
         train_dataset = BasicDataset(args, train_list, train_transform)
-        val_dataset = BasicDataset(args, val_list, val_transform)
+        val_dataset = BasicTestDataset(args, val_list, val_transform)
         return train_dataset, val_dataset
     else:
-        val_dataset = BasicDataset(args, val_list, val_transform)
+        val_dataset = BasicTestDataset(args, val_list, val_transform)
         return val_dataset
 
 
