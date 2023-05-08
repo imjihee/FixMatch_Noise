@@ -190,6 +190,10 @@ def main():
         if args.dataset=='nepes':
             print("*** build_resnet50_nepes_model ***")
             model = build_resnet('resnet50','fanin')
+
+            pretrained_weights = models.resnet50(pretrained=True).state_dict()
+            model.load_state_dict(pretrained_weights)
+
             if model.fc.out_features != args.num_classes:
                     fc_in = model.fc.in_features
                     model.fc = nn.Linear(fc_in, args.num_classes)
@@ -267,13 +271,7 @@ def main():
     
     elif args.dataset == 'nepes':
         args.num_classes = 22
-        if args.arch == 'wideresnet':
-            args.model_depth = 28
-            args.model_width = 2
-        elif args.arch == 'resnext':
-            args.model_cardinality = 4
-            args.model_depth = 28
-            args.model_width = 4
+        #model is always resnet50
 
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
