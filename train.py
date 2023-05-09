@@ -35,7 +35,7 @@ from models.resnet import ResNet50, ResNet101
 from utils import evaluate, adjust_learning_rate, adjust_lambda, evaluate_nepes
 import transform_ad
 
-import torchvision.models as models
+import torchvision.models as torchvision_models
 import torch.nn as nn
 
 from nepes_dataset import create_dataset, Nepes_SSL
@@ -188,10 +188,10 @@ def main():
 
     def create_model(args):
         if args.dataset=='nepes':
-            print("*** build_resnet50_nepes_model ***")
+            print("*** build resnet50 nepes model ***")
             model = build_resnet('resnet50','fanin')
 
-            pretrained_weights = models.resnet50(pretrained=True).state_dict()
+            pretrained_weights = torchvision_models.resnet50(pretrained=True).state_dict()
             model.load_state_dict(pretrained_weights)
 
             if model.fc.out_features != args.num_classes:
@@ -348,6 +348,8 @@ def main():
     train_sampler = RandomSampler if args.local_rank == -1 else DistributedSampler 
     #distributedsampler: batch dataset을 core만큼 나눔
     clear_idx = np.where(mask)[0]
+    logger.info("*** Masking Finished ***")
+    logger.info(f"num of label removed samples: {len(clear_idx)}")
 
     labeled_idx = np.hstack([clear_idx for _ in range(7)])
     unlabeled_idx = np.array(range(len(mask)))
@@ -390,11 +392,8 @@ def main():
     
     if args.dataset == 'nepes':
         labeled_dataset = Nepes_SSL(args.path, train_dataset, labeled_idx, train=True, transform = transform_labeled)
-        unlabeled_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.5071, 0.4867, 0.4408), std=(0.2675, 0.2565, 0.2761)))
+        unlabeled_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)))
         test_dataset = test_dataset_mask
-
-        #correct_ac = labeled_dataset.correct_cnt / len(labeled_dataset.targets)
-        #logger.info(f"  Correct_Accuracy = {correct_ac}")
 
     labeled_trainloader = DataLoader(
         labeled_dataset,
@@ -420,7 +419,7 @@ def main():
         torch.distributed.barrier()
 
     model = create_model(args)
-
+    """
     if args.pretrain:
         if args.arch == 'wideresnet':
             pretrain = models.resnet50(pretrained=True)
@@ -433,6 +432,7 @@ def main():
             model.load_state_dict(pretrain.state_dict(), strict=False)
         except RuntimeError as e:
             print('Ignoring "' + str(e) + '"')
+    """
 
     if args.local_rank == 0:
         torch.distributed.barrier()

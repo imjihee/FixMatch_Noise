@@ -79,7 +79,7 @@ class BasicDataset(Dataset):
             #else:
             img = self.transform(**{'image': img}) #type(img): dict, img['image'].shape: (256, 256, 3), ndarray type
             img = torch.tensor(img['image'])
-        img = np.array(torch.tensor(img).float()).transpose((2,0,1))
+        img = np.array(img.clone().detach().float()).transpose((2,0,1))
         return img, c, index
 
     def __len__(self):
@@ -116,7 +116,7 @@ class BasicTestDataset(Dataset):
             #else:
             img = self.transform(**{'image': img}) #type(img): dict, img['image'].shape: (256, 256, 3), ndarray type
             img = torch.tensor(img['image'])
-        img = np.array(torch.tensor(img).float()).transpose((2,0,1))
+        img = np.array(img.clone().detach().float()).transpose((2,0,1))
         return img, c
 
     def __len__(self):
