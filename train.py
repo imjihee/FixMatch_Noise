@@ -189,6 +189,7 @@ def main():
     def create_model(args):
         if args.dataset=='nepes':
             print("*** build resnet50 nepes model ***")
+            print("Num Class:", args.num_classes)
             model = build_resnet('resnet50','fanin')
 
             pretrained_weights = torchvision_models.resnet50(pretrained=True).state_dict()
@@ -331,7 +332,6 @@ def main():
         args.top_bn = False
         args.epoch_decay_start = 100
         train_dataset, test_dataset_mask = create_dataset(args, args.path, is_train=True)
-        #test_dataset_mask = create_dataset(args, args.path, is_train=False)
         print("*** nepes dataset ready ***")
 
     if args.local_rank == 0:
@@ -349,27 +349,33 @@ def main():
     #distributedsampler: batch dataset을 core만큼 나눔
     clear_idx = np.where(mask)[0]
     logger.info("*** Masking Finished ***")
-    logger.info(f"num of label removed samples: {len(clear_idx)}")
+    logger.info(f"num of labeled samples: {len(clear_idx)}")
 
     labeled_idx = np.hstack([clear_idx for _ in range(7)])
     unlabeled_idx = np.array(range(len(mask)))
 
     #print("* Labeled Index Length: ", len(clear_idx), "*Expanded Index Length: ", len(labeled_idx))
-    cropsize=32
+    
     if args.dataset=="nepes":
         cropsize=400
-
+        mean_ = (0.485, 0.456, 0.406)
+        std_ = (0.229, 0.224, 0.225)
+    else:
+        cropsize=32
+        mean_ = (0.4914, 0.4822, 0.4465)
+        std_ = (0.2471, 0.2435, 0.2616)
+            
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(cropsize,
                               padding=int(cropsize * 0.125),
                               padding_mode='reflect'),
         transforms.ToTensor(),
-        transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616))
+        transforms.Normalize(mean=mean_, std=std_)
     ])
     transform_val = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2471, 0.2435, 0.2616))
+        transforms.Normalize(mean=mean_, std=std_)
     ])
     if args.dataset == 'cifar10':
         labeled_dataset = CIFAR10SSL('./data', train_dataset, labeled_idx, train=True, transform = transform_labeled)
@@ -391,8 +397,8 @@ def main():
         logger.info(f"  Correct_Accuracy = {correct_ac}")
     
     if args.dataset == 'nepes':
-        labeled_dataset = Nepes_SSL(args.path, train_dataset, labeled_idx, train=True, transform = transform_labeled)
-        unlabeled_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)))
+        labeled_dataset = Nepes_SSL(args.path, train_dataset, labeled_idx, train=True, transform = transform_labeled, log=logger)
+        unlabeled_dataset = Nepes_SSL(args.path, train_dataset, unlabeled_idx, train=True, transform = TransformFixMatch(cropsize, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)), log=logger)
         test_dataset = test_dataset_mask
 
     labeled_trainloader = DataLoader(
@@ -648,35 +654,92 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
 
         example_loss = example_loss - example_loss.mean()
         moving_loss_dic = moving_loss_dic + example_loss  # moving_loss_dic: ndarray, (50000,0)
-
-        ind_1_sorted = np.argsort(moving_loss_dic)  # moving_loss_dic를 오름차순 정렬하는 인덱스의 array 반환.
-        loss_1_sorted = moving_loss_dic[ind_1_sorted]
-
-        remember_rate = 1 - remove_rate  # 남길 데이터 비율
-        num_remember = int(remember_rate * len(loss_1_sorted))  # num_remember: 40000 @ remove_rate=0.2
-        """
-        noise_accuracy = np.sum(noise_or_not[ind_1_sorted[num_remember:]]) / float(
-            len(loss_1_sorted) - num_remember)  # 제거할 데이터 중 노이즈 개수 / 총 노이즈 개수
-        """
-        mask = np.ones(noise_or_not, dtype=np.float32)
-        mask[ind_1_sorted[num_remember:]] = 0  # 지워야 할 인덱스에 대해 0 저장. mask[idx]=0
         
-        #correct_acc = np.sum(np.logical_and(mask, noise_or_not)) / (np.sum(mask))
-        #if correct_acc>best_mask_acc:
-        #    best_mask_acc = correct_acc
-        #    best_mask = mask
-        best_mask = mask
-
-        #top_accuracy_rm = int(0.9 * len(loss_1_sorted))
-        #top_accuracy = 1 - np.sum(noise_or_not[ind_1_sorted[top_accuracy_rm:]]) / float(
-        #    len(loss_1_sorted) - top_accuracy_rm)
-
         print("Masking - " + "epoch:%d" % epoch, "lr:%f" % lr, "train_loss:", globals_loss / ndata,
               "test_accuarcy:%f" % accuracy)
         logger.info('epoch: {:d}'.format(epoch))
         logger.info('test accuracy: {:.2f}'.format(accuracy))
 
-    return best_mask
+def masking_nepes_uniform(args, train_dataset, test_dataset, remove_rate):
+
+    network = build_resnet('resnet50','fanin')
+    if network.fc.out_features != args.num_classes:
+            fc_in = network.fc.in_features
+            network.fc = nn.Linear(fc_in, args.num_classes)
+            network.fc.reset_parameters()
+    network = network.cuda()
+
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
+                                                    batch_size=4,
+                                                    num_workers=args.num_workers,
+                                                    shuffle=True, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(
+        dataset=test_dataset, batch_size=32,
+        num_workers=args.num_workers, shuffle=False, pin_memory=False)
+
+    optimizer1 = torch.optim.SGD(network.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+    criterion = torch.nn.CrossEntropyLoss(reduce=False, ignore_index=-1).cuda()
+
+    noise_or_not = len(train_dataset)
+    print("train dataset 길이: ", noise_or_not)
+    moving_loss_dic = np.zeros(noise_or_not)
+    ndata = train_dataset.__len__()
+    
+    for epoch in range(1, args.mask_epoch):
+        # train models
+        globals_loss = 0
+        network.train()
+        with torch.no_grad():
+            accuracy = evaluate_nepes(test_loader, network)
+        example_loss = np.zeros([noise_or_not], dtype=float) #수정
+
+        # Learning Rate Scheduling
+        t = (epoch % 10 + 1) / float(10)  # 40: lr frequency
+        lr = (1 - t) * 0.01 + t * 0.001  # default _ 0.01: max, 0.001: min lr
+
+        for param_group in optimizer1.param_groups:
+            param_group['lr'] = lr
+
+        for i, (images, labels, indexes) in enumerate(train_loader):
+
+            images = Variable(images).cuda()
+            labels = Variable(labels).cuda()
+
+            logits = network(images)
+            loss_1 = criterion(logits, labels)
+
+            for pi, cl in zip(indexes, loss_1):
+                
+                example_loss[pi] = cl.cpu().data.item()
+
+            globals_loss += loss_1.sum().cpu().data.item()
+
+            loss_1 = loss_1.mean()
+            optimizer1.zero_grad()
+            loss_1.backward()
+            optimizer1.step()  # training in an epoch finish
+
+        example_loss = example_loss - example_loss.mean()
+        moving_loss_dic = moving_loss_dic + example_loss  # moving_loss_dic: ndarray, (50000,0)
+        
+        print("Masking - " + "epoch:%d" % epoch, "lr:%f" % lr, "train_loss:", globals_loss / ndata,
+              "test_accuarcy:%f" % accuracy)
+        logger.info('epoch: {:d}'.format(epoch))
+        logger.info('test accuracy: {:.2f}'.format(accuracy))
+
+    ind_1_sorted = np.argsort(moving_loss_dic)  # moving_loss_dic를 오름차순 정렬하는 인덱스의 array 반환.
+    loss_1_sorted = moving_loss_dic[ind_1_sorted]
+
+    remember_rate = 1 - remove_rate  # 남길 데이터 비율
+    num_remember = int(remember_rate * len(loss_1_sorted))  # num_remember: 40000 @ remove_rate=0.2
+    """
+    noise_accuracy = np.sum(noise_or_not[ind_1_sorted[num_remember:]]) / float(
+        len(loss_1_sorted) - num_remember)  # 제거할 데이터 중 노이즈 개수 / 총 노이즈 개수
+    """
+    mask = np.ones(noise_or_not, dtype=np.float32)
+    mask[ind_1_sorted[num_remember:]] = 0  # 지워야 할 인덱스에 대해 0 저장. mask[idx]=0
+    
+    return mask
 
 def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
           model, optimizer, ema_model, scheduler):
@@ -813,7 +876,10 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
                     loss_x=losses_x.avg,
                     loss_u=losses_u.avg,
                     mask=mask_probs.avg))
+        
                 p_bar.update()
+        #
+        #logger.info(trainloss:losses.avg)
 
         if not args.no_progress:
             p_bar.close()

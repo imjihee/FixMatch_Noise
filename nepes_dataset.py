@@ -41,6 +41,7 @@ class BasicDataset(Dataset):
         self.path_list = path_list
         self.transform = transform
         self.args = args
+        #self.classcnt = np.zeros()
 
         data_list = []
         if len(self.path_list) < 1000:
@@ -48,7 +49,7 @@ class BasicDataset(Dataset):
             for i in range(len(self.path_list)):
                 img, c = self.path_list[i]
                 img = Image.open(img)
-                img1 = np.ar78ray(img)
+                img1 = np.array(img)
                 data_list.append((img1, c))
             self.data_list = data_list
         else:
@@ -63,23 +64,9 @@ class BasicDataset(Dataset):
             img = Image.open(path)
             img = np.array(img)
         if self.transform:
-            """
-            if self.args.use_aa:
-                nepes_policy_prob = [0.0392102636396885,0.052076268937526,0.0838601361319888,0.251490306749474,0.0618416885845363,0.000759744541937835,
-                2.56413841270842E-05,0.0124172260984778,0.0287941060960293,0.0298023007344455,0.000452175414466183,0.125965755360085,0.237238807510948,
-                0.0535663825503434,0.000400940065446775,3.47608802258037E-05,0.000064520092564635,0.0219989120960236
-]
-                if random.random() > 0.5:
-                    num = 0
-                else:
-                    num = random.choices(range(18), weights=nepes_policy_prob, k=1)[0]
-                img = deepAA_transform(img, num) #array return
-                img = torch.tensor(img['image'])
-            """
-            #else:
             img = self.transform(**{'image': img}) #type(img): dict, img['image'].shape: (256, 256, 3), ndarray type
             img = torch.tensor(img['image'])
-        img = np.array(img.clone().detach().float()).transpose((2,0,1))
+        img = np.array(torch.tensor(img).float()).transpose((2,0,1))
         return img, c, index
 
     def __len__(self):
@@ -116,7 +103,7 @@ class BasicTestDataset(Dataset):
             #else:
             img = self.transform(**{'image': img}) #type(img): dict, img['image'].shape: (256, 256, 3), ndarray type
             img = torch.tensor(img['image'])
-        img = np.array(img.clone().detach().float()).transpose((2,0,1))
+        img = np.array(torch.tensor(img).float()).transpose((2,0,1))
         return img, c
 
     def __len__(self):
@@ -139,6 +126,7 @@ def create_dataset(args, data_root, is_train: bool):
             classes_list.remove(c)
     classes = {name: i for i, name in enumerate(classes_list)}
 
+    #class 개수 초기화
     args.num_classes = len(classes)
     train_transform = create_nepes_transform(args, is_train=True)
     val_transform = create_nepes_transform(args, is_train=False)
@@ -146,17 +134,7 @@ def create_dataset(args, data_root, is_train: bool):
     if not os.path.exists(args.save_path):
         os.makedirs(args.save_path, exist_ok=True)
     path = args.save_path + '/train_val_lists.p'
-    """
-    if (args.resume or args.debug) and os.path.isfile(path):
-        with open(path, 'rb') as file:
-            pkl = pickle.load(file)
-            train_list = pkl['train']
-            val_list = pkl['val']
-            if 'num_data_cls' in pkl.keys():
-                args.num_data_cls = pkl['num_data_cls']
-            if 'class_name' in pkl.keys():
-                args.class_name = pkl['class_name']
-    """
+
     if True:
         #assert os.path.isfile(path) is False, 'ERROR: you are trying to reset file \'train_val_lists.p\'. this will mess up the whole experiment.' \
         #                                      ' if you want to resume from checkpoint without resetting, please add \'train.resume True\' in command when running. ' \
@@ -261,7 +239,7 @@ def create_nepes_transform(args, is_train: bool) -> Callable:
 class Nepes_SSL():
     def __init__(self, root, train_dataset, indexs, train=True,
                  transform=None, target_transform=None,
-                 download=False):
+                 download=False, log=None):
         
         self.transform = transform
         self.data = []
@@ -277,7 +255,8 @@ class Nepes_SSL():
             #self.targets.append(train_dataset.train_labels[idx].item())
 
         cnt = collections.Counter(np.array(self.targets))
-        print("* idx distribution: ", cnt)
+        cnt = sorted(cnt.items())
+        log.info(f"* idx distribution: {cnt}")
 
     def __getitem__(self, index):
         img, target = self.data[index], self.targets[index]
