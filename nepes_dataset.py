@@ -43,20 +43,25 @@ class BasicDataset(Dataset):
         self.args = args
 
         data_list = []
-        if len(self.path_list) < 1000 or args.uniform_masking:
+        if len(self.path_list) < 1000:
             # if the size of dataset is small, load all of them for faster speed
-            classcnt = np.zeros(args.num_classes)
             for i in range(len(self.path_list)):
                 img, c = self.path_list[i]
                 img = Image.open(img)
                 img1 = np.array(img)
                 data_list.append((img1, c))
-                classcnt[c]+=1
             self.data_list = data_list
-            self.classcnt = classcnt
         else:
             # if the size of dataset is big, load a batch at each iteration
             self.data_list = None
+
+        if args.uniform_masking:
+            classcnt = np.zeros(args.num_classes)
+            for i in range(len(self.path_list)):
+                _, c = self.path_list[i]
+                classcnt[c]+=1
+                self.classcnt = classcnt
+            
 
     def __getitem__(self, index):
         if self.data_list:
@@ -180,7 +185,7 @@ def create_dataset(args, data_root, is_train: bool):
         with open(path, 'wb') as file:
             pickle.dump(datapath_dict, file)
 
-    #train_list: [(-.jpg, class) (-.jpg, class) ...]
+    #train_list: [(-.jpg, class label) (-.jpg, class label) ...]
 
     if is_train:
         train_dataset = BasicDataset(args, train_list, train_transform)
