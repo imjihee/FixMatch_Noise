@@ -164,6 +164,8 @@ def main():
     parser.add_argument('--use-eval', action='store_true')
 
     parser.add_argument('--save-path', type=str, default='./save/')
+    
+    parser.add_argument('--uniform-masking', action='store_true')
 
 
     args = parser.parse_args()
@@ -659,6 +661,21 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
               "test_accuarcy:%f" % accuracy)
         logger.info('epoch: {:d}'.format(epoch))
         logger.info('test accuracy: {:.2f}'.format(accuracy))
+        
+    ind_1_sorted = np.argsort(moving_loss_dic)  # moving_loss_dic를 오름차순 정렬하는 인덱스의 array 반환.
+    loss_1_sorted = moving_loss_dic[ind_1_sorted]
+
+    remember_rate = 1 - remove_rate  # 남길 데이터 비율
+    num_remember = int(remember_rate * len(loss_1_sorted))  # num_remember: 40000 @ remove_rate=0.2
+    """
+    noise_accuracy = np.sum(noise_or_not[ind_1_sorted[num_remember:]]) / float(
+        len(loss_1_sorted) - num_remember)  # 제거할 데이터 중 노이즈 개수 / 총 노이즈 개수
+    """
+    mask = np.ones(noise_or_not, dtype=np.float32)
+    mask[ind_1_sorted[num_remember:]] = 0  # 지워야 할 인덱스에 대해 0 저장. mask[idx]=0
+    
+    return mask
+
 
 def masking_nepes_uniform(args, train_dataset, test_dataset, remove_rate):
 
@@ -731,11 +748,11 @@ def masking_nepes_uniform(args, train_dataset, test_dataset, remove_rate):
     loss_1_sorted = moving_loss_dic[ind_1_sorted]
 
     remember_rate = 1 - remove_rate  # 남길 데이터 비율
-    num_remember = int(remember_rate * len(loss_1_sorted))  # num_remember: 40000 @ remove_rate=0.2
-    """
-    noise_accuracy = np.sum(noise_or_not[ind_1_sorted[num_remember:]]) / float(
-        len(loss_1_sorted) - num_remember)  # 제거할 데이터 중 노이즈 개수 / 총 노이즈 개수
-    """
+    classcnt = train_dataset.classcnt
+    class_remember = (np.array(classcnt)*remember_rate).round(0) #클래스별 남길 데이터 개수 저장한 리스트
+    
+    #num_remember = int(remember_rate * len(loss_1_sorted))  # num_remember: 40000 @ remove_rate=0.2
+
     mask = np.ones(noise_or_not, dtype=np.float32)
     mask[ind_1_sorted[num_remember:]] = 0  # 지워야 할 인덱스에 대해 0 저장. mask[idx]=0
     

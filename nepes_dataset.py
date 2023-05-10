@@ -41,17 +41,19 @@ class BasicDataset(Dataset):
         self.path_list = path_list
         self.transform = transform
         self.args = args
-        #self.classcnt = np.zeros()
 
         data_list = []
-        if len(self.path_list) < 1000:
+        if len(self.path_list) < 1000 or args.uniform_masking:
             # if the size of dataset is small, load all of them for faster speed
+            classcnt = np.zeros(args.num_classes)
             for i in range(len(self.path_list)):
                 img, c = self.path_list[i]
                 img = Image.open(img)
                 img1 = np.array(img)
                 data_list.append((img1, c))
+                classcnt[c]+=1
             self.data_list = data_list
+            self.classcnt = classcnt
         else:
             # if the size of dataset is big, load a batch at each iteration
             self.data_list = None
@@ -66,7 +68,8 @@ class BasicDataset(Dataset):
         if self.transform:
             img = self.transform(**{'image': img}) #type(img): dict, img['image'].shape: (256, 256, 3), ndarray type
             img = torch.tensor(img['image'])
-        img = np.array(torch.tensor(img).float()).transpose((2,0,1))
+
+        img = np.array(img.float()).transpose((2,0,1))
         return img, c, index
 
     def __len__(self):
@@ -103,7 +106,7 @@ class BasicTestDataset(Dataset):
             #else:
             img = self.transform(**{'image': img}) #type(img): dict, img['image'].shape: (256, 256, 3), ndarray type
             img = torch.tensor(img['image'])
-        img = np.array(torch.tensor(img).float()).transpose((2,0,1))
+        img = np.array(img.float()).transpose((2,0,1))
         return img, c
 
     def __len__(self):
