@@ -166,6 +166,7 @@ def main():
     parser.add_argument('--save-path', type=str, default='./save/')
     
     parser.add_argument('--uniform-masking', action='store_true')
+    parser.add_argument('--epochs', default=200, type=int)
 
 
     args = parser.parse_args()
@@ -294,7 +295,6 @@ def main():
 
     if args.dataset == 'cifar10':
         args.top_bn = False
-        args.epoch_decay_start = 80
         train_dataset = nCIFAR10(root=args.result_dir,
                                 download=True,
                                 train=True,
@@ -313,7 +313,6 @@ def main():
 
     if args.dataset == 'cifar100':
         args.top_bn = False
-        args.epoch_decay_start = 100
         train_dataset = nCIFAR100(root=args.result_dir,
                                  download=True,
                                  train=True,
@@ -332,7 +331,6 @@ def main():
         
     if args.dataset == 'nepes':
         args.top_bn = False
-        args.epoch_decay_start = 100
         train_dataset, test_dataset_mask = create_dataset(args, args.path, is_train=True)
         print("*** nepes dataset ready ***")
 
@@ -355,6 +353,7 @@ def main():
     clear_idx = np.where(mask)[0]
     logger.info("*** Masking Finished ***")
     logger.info(f"num of labeled samples: {len(clear_idx)}")
+    logger.info(f"num of unlabeled samples: {len(mask)-len(clear_idx)}")
 
     labeled_idx = np.hstack([clear_idx for _ in range(7)])
     unlabeled_idx = np.array(range(len(mask)))
@@ -373,7 +372,7 @@ def main():
     transform_labeled = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomCrop(cropsize,
-                              padding=int(cropsize * 0.125),
+                              padding=4,
                               padding_mode='reflect'),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean_, std=std_)
@@ -461,9 +460,8 @@ def main():
     optimizer = optim.SGD(grouped_parameters, lr=args.lr,
                           momentum=0.9, nesterov=args.nesterov)
 
-    args.epochs = math.ceil(args.total_steps / args.eval_step)
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer, args.warmup, args.total_steps)
+    #args.epochs = math.ceil(args.total_steps / args.eval_step)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, args.warmup, args.epochs)
 
     if args.use_ema:
         from models.ema import ModelEMA
@@ -501,7 +499,7 @@ def main():
     logger.info(f"  Batch size per GPU = {args.batch_size}")
     logger.info(
         f"  Total train batch size = {args.batch_size*args.world_size}")
-    logger.info(f"  Total optimization steps = {args.total_steps}")
+    #logger.info(f"  Total optimization steps = {args.total_steps}")
 
     model.zero_grad()
 
@@ -617,7 +615,7 @@ def masking_nepes(args, train_dataset, test_dataset, remove_rate):
     criterion = torch.nn.CrossEntropyLoss(reduce=False, ignore_index=-1).cuda()
 
     noise_or_not = len(train_dataset)
-    print("train dataset 길이: ", noise_or_not)
+    logger.info(f"train dataset 크기: {noise_or_not}")
     moving_loss_dic = np.zeros(noise_or_not)
     ndata = train_dataset.__len__()
     #best_mask_acc = 0
@@ -698,7 +696,7 @@ def masking_nepes_uniform(args, train_dataset, test_dataset, remove_rate):
     criterion = torch.nn.CrossEntropyLoss(reduce=False, ignore_index=-1).cuda()
 
     train_len = len(train_dataset)
-    print("train dataset 길이: ", train_len)
+    logger.info(f"train dataset 크기: {train_len}")
     moving_loss_dic = np.zeros(train_len)
     ndata = train_dataset.__len__()
     
@@ -782,9 +780,9 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
     labeled_iter = iter(labeled_trainloader)
     unlabeled_iter = iter(unlabeled_trainloader)
     criterion = nn.CrossEntropyLoss().cuda()
-
+    
     model.train()
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(args.start_epoch, args.epochs): #수정
         batch_time = AverageMeter()
         data_time = AverageMeter()
         losses = AverageMeter()
@@ -795,115 +793,112 @@ def train(args, labeled_trainloader, unlabeled_trainloader, test_loader,
             p_bar = tqdm(range(args.eval_step),
                          disable=args.local_rank not in [-1, 0])
         
-        with torch.autocast(device_type='cuda', dtype=torch.float16):
-            for batch_idx in range(args.eval_step):
-                """Training Data Setting"""
-                #labeled data
-                try:
-                    inputs_x, targets_x = labeled_iter.next()
-                except: #dataloader 모두 순회한 경우, epoch+=1
-                    if args.world_size > 1:
-                        labeled_epoch += 1
-                        labeled_trainloader.sampler.set_epoch(labeled_epoch)
-                    labeled_iter = iter(labeled_trainloader)
-                    inputs_x, targets_x = labeled_iter.next()
+        #with torch.autocast(device_type='cuda', dtype=torch.float16):
+        for batch_idx in range(args.eval_step):
+            """Training Data Setting"""
+            #labeled data
+            try:
+                inputs_x, targets_x = labeled_iter.next()
+            except: #dataloader 모두 순회한 경우, epoch+=1
+                if args.world_size > 1:
+                    labeled_epoch += 1
+                    labeled_trainloader.sampler.set_epoch(labeled_epoch)
+                labeled_iter = iter(labeled_trainloader)
+                inputs_x, targets_x = labeled_iter.next()
 
-                #unlabeled data
-                try:
-                    (inputs_u_w, inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next()
-                except: #dataloader 모두 순회한 경우, epoch+=1
-                    if args.world_size > 1:
-                        unlabeled_epoch += 1
-                        unlabeled_trainloader.sampler.set_epoch(unlabeled_epoch)
-                    unlabeled_iter = iter(unlabeled_trainloader)
-                    (inputs_u_w, inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next() #weak, strong - return only image, not target
+            #unlabeled data
+            try:
+                (inputs_u_w, inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next()
+            except: #dataloader 모두 순회한 경우, epoch+=1
+                if args.world_size > 1:
+                    unlabeled_epoch += 1
+                    unlabeled_trainloader.sampler.set_epoch(unlabeled_epoch)
+                unlabeled_iter = iter(unlabeled_trainloader)
+                (inputs_u_w, inputs_u_w2, inputs_u_s), _ = unlabeled_iter.next() #weak, strong - return only image, not target
 
 
-                data_time.update(time.time() - end)
-                batch_size = inputs_x.shape[0]
+            data_time.update(time.time() - end)
+            batch_size = inputs_x.shape[0]
 
-                #pdb.set_trace()
+            mul=3*args.mu+1 #inputs_u_w2까지 쓰는 경우 *3
 
-                mul=3*args.mu+1 #inputs_u_w2까지 쓰는 경우 *3
+            inputs = interleave(
+                torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), mul).to(args.device) #torch.cat(cifar!): torch.Size([960, 3, 32, 32])
+                #torch.cat(nepes!): torch.Size([704, 3, 400, 400])
 
-                inputs = interleave(
-                    torch.cat((inputs_x, inputs_u_w, inputs_u_w2, inputs_u_s)), mul).to(args.device) #torch.cat(cifar!): torch.Size([960, 3, 32, 32])
-                    #torch.cat(nepes!): torch.Size([704, 3, 400, 400])
+            targets_x = targets_x.to(args.device)
 
-                targets_x = targets_x.to(args.device)
-
-                
-
-                """Start Training"""
-                logits = model(inputs)
-
-                logits = de_interleave(logits, mul)
-                #logits_x, logits_u_w, logits_u_w2, logits_u_s: 각 labeled, unlabeled_weak, unlabeled_strong에 대한 logits
-                logits_x = logits[:batch_size]
-                logits_u_w, logits_u_w2, logits_u_s = logits[batch_size:].chunk(3)
-                del logits
-
-                """EMA logits - labeled data"""
-                logits_ema = model_ema(inputs)
-                logits_ema = de_interleave(logits_ema, mul)
-
-                logits_x_ema = logits_ema[:batch_size]
-                logits_u_w_ema, logits_u_w2_ema, logits_u_s_ema = logits_ema[batch_size:].chunk(3)
-                del logits_ema
-
-                Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
-
-                if args.ema_ensemble:
-                    logits_u_w = (logits_u_w + logits_u_w2 + logits_u_w_ema + logits_u_w2_ema)/4
-                pseudo_label = torch.softmax(logits_u_w.detach()/args.T, dim=-1)
-                
-                #torch.max: return values, indices
-                max_probs, targets_u = torch.max(pseudo_label, dim=-1)
-
-                #ge: check if >=
-                mask = max_probs.ge(args.threshold).float() #pseudo-labeling
-
-                Lu = (F.cross_entropy(logits_u_s, targets_u,
-                                    reduction='none') * mask).mean()
-                
-                """Final loss"""
-                #lambda_ = adjust_lambda(args.lambda_u, (epoch+1)/args.epochs)
-                lambda_ = args.lambda_u
-                loss = Lx + lambda_ * Lu
-
-                if args.amp:
-                    with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                else:
-                    loss.backward()
-
-                losses.update(loss.item())
-                losses_x.update(Lx.item())
-                losses_u.update(Lu.item())
-                optimizer.step()
-                scheduler.step()
-                if args.use_ema:
-                    ema_model.update(model)
-                model.zero_grad()
-
-                batch_time.update(time.time() - end)
-                end = time.time()
-                mask_probs.update(mask.mean().item())
-                if not args.no_progress:
-                    p_bar.set_description("Train Epoch: {epoch}/{epochs:4}. Iter: {batch:4}/{iter:4}. LR: {lr:.4f}. Data: {data:.3f}s. Batch: {bt:.3f}s. Loss: {loss:.4f}. Loss_x: {loss_x:.4f}. Loss_u: {loss_u:.4f}. Mask: {mask:.2f}. ".format(
-                        epoch=epoch + 1,
-                        epochs=args.epochs,
-                        batch=batch_idx + 1,
-                        iter=args.eval_step,
-                        lr=scheduler.get_last_lr()[0],
-                        data=data_time.avg,
-                        bt=batch_time.avg,
-                        loss=losses.avg,
-                        loss_x=losses_x.avg,
-                        loss_u=losses_u.avg,
-                        mask=mask_probs.avg))
             
-                    p_bar.update()
+
+            """Start Training"""
+            logits = model(inputs)
+
+            logits = de_interleave(logits, mul)
+            #logits_x, logits_u_w, logits_u_w2, logits_u_s: 각 labeled, unlabeled_weak, unlabeled_strong에 대한 logits
+            logits_x = logits[:batch_size]
+            logits_u_w, logits_u_w2, logits_u_s = logits[batch_size:].chunk(3)
+            del logits
+
+            """EMA logits - labeled data"""
+            logits_ema = model_ema(inputs)
+            logits_ema = de_interleave(logits_ema, mul)
+
+            logits_x_ema = logits_ema[:batch_size]
+            logits_u_w_ema, logits_u_w2_ema, logits_u_s_ema = logits_ema[batch_size:].chunk(3)
+            del logits_ema
+
+            Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
+
+            if args.ema_ensemble:
+                logits_u_w = (logits_u_w + logits_u_w2 + logits_u_w_ema + logits_u_w2_ema)/4
+            pseudo_label = torch.softmax(logits_u_w.detach()/args.T, dim=-1)
+            
+            #torch.max: return values, indices
+            max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+
+            #ge: check if >=
+            mask = max_probs.ge(args.threshold).float() #pseudo-labeling
+
+            Lu = (F.cross_entropy(logits_u_s, targets_u,
+                                reduction='none') * mask).mean()
+            
+            """Final loss"""
+            lambda_ = args.lambda_u
+            loss = Lx + lambda_ * Lu
+
+            if args.amp:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
+
+            losses.update(loss.item())
+            losses_x.update(Lx.item())
+            losses_u.update(Lu.item())
+            optimizer.step()
+            scheduler.step()
+            if args.use_ema:
+                ema_model.update(model)
+            model.zero_grad()
+
+            batch_time.update(time.time() - end)
+            end = time.time()
+            mask_probs.update(mask.mean().item())
+            if not args.no_progress:
+                p_bar.set_description("Train Epoch: {epoch}/{epochs:4}. Iter: {batch:4}/{iter:4}. LR: {lr:.4f}. Data: {data:.3f}s. Batch: {bt:.3f}s. Loss: {loss:.4f}. Loss_x: {loss_x:.4f}. Loss_u: {loss_u:.4f}. Mask: {mask:.2f}. ".format(
+                    epoch=epoch + 1,
+                    epochs=args.epochs,
+                    batch=batch_idx + 1,
+                    iter=args.eval_step,
+                    lr=scheduler.get_last_lr()[0],
+                    data=data_time.avg,
+                    bt=batch_time.avg,
+                    loss=losses.avg,
+                    loss_x=losses_x.avg,
+                    loss_u=losses_u.avg,
+                    mask=mask_probs.avg))
+        
+                p_bar.update()
         #
         #logger.info(trainloss:losses.avg)
 
